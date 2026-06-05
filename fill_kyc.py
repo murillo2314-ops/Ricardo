@@ -79,7 +79,7 @@ def create_kyc_pdf(output_path):
     y -= 22
 
     draw_field(c, "Phone:", "+1 (829) 546-0075", margin_l, y, 90)
-    draw_field(c, "Emergency Phone:", "(829) 546-0075 / (809) 645-007", col2, y, 120)
+    draw_field(c, "Emergency Phone:", "(829) 546-0075 / (809) 645-0075", col2, y, 120)
     y -= 20
 
     draw_field(c, "Email:", "murillo2314@gmail.com", margin_l, y, 90)
