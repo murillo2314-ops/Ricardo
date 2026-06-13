@@ -42,6 +42,8 @@ import drive_sync
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.ext import (
@@ -94,6 +96,27 @@ BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
 
 LOCATIONS   = ["Punta Cana", "Santo Domingo"]
 CATEGORIES  = ["Casa", "Obra"]
+
+# Botones del menú fijo (abajo del chat). El texto enviado por cada botón se
+# enruta al comando equivalente, así no hay que escribir comandos a mano.
+BTN_NUEVA      = "🧾 Nueva factura"
+BTN_RESUMEN    = "📊 Resumen"
+BTN_EXPORTAR   = "📥 Descargar Excel"
+BTN_PENDIENTES = "⚠️ Pendientes"
+BTN_AYUDA      = "❓ Ayuda"
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Menú permanente de botones grandes; evita tener que escribir comandos."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(BTN_NUEVA)],
+            [KeyboardButton(BTN_RESUMEN), KeyboardButton(BTN_EXPORTAR)],
+            [KeyboardButton(BTN_PENDIENTES), KeyboardButton(BTN_AYUDA)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Toca un botón o envía una foto de la factura",
+    )
 
 EDITABLE_FIELDS = {
     "total":    "💰 Total",
@@ -930,27 +953,30 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # ──────────────────────────────────────────────────────────────
 
 async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Pantalla de bienvenida tras desbloquear con la contraseña."""
+    """Pantalla de bienvenida tras desbloquear con la contraseña.
+    Muestra además el menú fijo de botones (para no escribir comandos)."""
     mes = get_mes(context)
     await update.message.reply_text(
         f"🔓 *Acceso concedido — Bot 606 DGII*\n\n"
         f"Mes activo: *{mes}*\n\n"
-        f"*Registrar facturas:*\n"
-        f"📸 Envía una *foto* de la factura (o usa /nueva)\n"
-        f"   → eliges *el mes*, ubicación y categoría; reviso los datos\n"
-        f"   y la guardo en el Excel que corresponda.\n\n"
-        f"*Consultas:*\n"
-        f"📊 /resumen — totales del mes\n"
-        f"📋 /lista — todas las facturas\n"
-        f"⚠️ /pendientes — facturas con advertencias\n"
-        f"📥 /exportar — descargar Excel 606\n"
-        f"🗑 /borrar — eliminar última factura\n"
-        f"📅 /mes YYYY-MM — cambiar mes activo",
+        f"👇 Usa los *botones de abajo* — no hace falta escribir comandos:\n\n"
+        f"🧾 *Nueva factura* — o simplemente envía una *foto* de la factura\n"
+        f"📊 *Resumen* — totales del mes\n"
+        f"📥 *Descargar Excel* — el archivo 606 del mes\n"
+        f"⚠️ *Pendientes* — facturas con advertencias\n"
+        f"❓ *Ayuda* — vuelve a ver este menú\n\n"
+        f"_Comandos avanzados:_ /lista, /borrar, /mes YYYY-MM",
         parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(),
     )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    await show_welcome(update, context)
+
+
+async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     await show_welcome(update, context)
 
@@ -1332,6 +1358,8 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("nueva", start_flow),
+            # Botón "🧾 Nueva factura" del menú fijo
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
             # Also allow starting by sending a photo directly
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
         ],
@@ -1375,6 +1403,13 @@ def main():
     app.add_handler(CommandHandler("exportar",   cmd_exportar))
     app.add_handler(CommandHandler("borrar",     cmd_borrar))
     app.add_handler(CommandHandler("mes",        cmd_mes))
+    app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
+
+    # Botones del menú fijo → mismos comandos (sin escribir nada)
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$"),    cmd_resumen))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_EXPORTAR)}$"),   cmd_exportar))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_PENDIENTES)}$"), cmd_pendientes))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AYUDA)}$"),      cmd_ayuda))
 
     # Selección de mes para /resumen y /exportar (botones fuera del flujo)
     app.add_handler(CallbackQueryHandler(on_pick_resumen,  pattern="^res_"))
