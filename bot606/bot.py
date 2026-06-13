@@ -2,12 +2,17 @@
 """
 Bot 606 DGII — Telegram con flujo guiado por botones.
 
+Acceso:
+  El bot es privado. Para empezar hay que enviar la contraseña (BOT_PASSWORD,
+  por defecto "/Juan2202"). Hasta entonces no responde a nada más.
+
 Flujo de captura:
   1. /nueva (o enviar foto directamente)
-  2. ¿Dónde fue la compra?  → [Punta Cana] [Santo Domingo]
-  3. ¿Para qué es?          → [Casa] [Obra]
-  4. Envía la foto de la factura
-  5. Revisión de datos      → [✅ Aceptar] [✏️ Corregir] [❌ Cancelar]
+  2. ¿A qué mes (Excel) va? → [Abr] [May] [Jun] … [Auto por fecha]
+  3. ¿Dónde fue la compra?  → [Punta Cana] [Santo Domingo]
+  4. ¿Para qué es?          → [Casa] [Obra]
+  5. Envía la foto de la factura
+  6. Revisión de datos      → [✅ Aceptar] [✏️ Corregir] [❌ Cancelar]
      └ Corregir:            → seleccionar campo → escribir nuevo valor → volver a revisión
 
 Otros comandos:
@@ -41,11 +46,13 @@ from telegram import (
 )
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -70,15 +77,20 @@ ALLOWED_USERS = set(
     int(x.strip()) for x in ALLOWED_USERS_ENV.split(",") if x.strip().isdigit()
 )
 
+# Contraseña para iniciar el bot. Se puede cambiar con la variable BOT_PASSWORD
+# en Railway; por defecto es la acordada con el cliente.
+BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
+
 # Conversation states
 (
+    S_MONTH,
     S_LOCATION,
     S_CATEGORY,
     S_PHOTO,
     S_CONFIRM,
     S_EDIT_SELECT,
     S_EDIT_VALUE,
-) = range(6)
+) = range(7)
 
 LOCATIONS   = ["Punta Cana", "Santo Domingo"]
 CATEGORIES  = ["Casa", "Obra"]
@@ -236,6 +248,7 @@ CARDNET por la mitad), NO importa: usa SIEMPRE el TOTAL COMPLETO de la factura
 fiscal. Los vouchers de pago parcial no son facturas separadas.
 MÉTODO: EFECTIVO | TARJETA_CREDITO | TARJETA_DEBITO | TRANSFERENCIA | CHEQUE | CREDITO
 NCF papel: B+2+8 dígitos=11 chars. NCF electrónico: E+2+10 dígitos=13 chars.
+NCF SIN guiones ni espacios: 'B01-0001234' → 'B010001234'. Solo letras y números.
 TIPO: B01/E31=CREDITO_FISCAL | B02/E32=CONSUMIDOR_FINAL | B14/E34=REGIMEN_ESPECIAL
 
 nivel_confianza: ALTO|MEDIO|BAJO
@@ -285,7 +298,7 @@ def parse_ecf_url(qr_text: str) -> dict | None:
                 if key.lower() == k.lower(): return v[0]
             return None
         rnc  = re.sub(r"\D", "", get("RNCEmisor") or get("RncEmisor") or "")
-        ncf  = (get("ENCF") or "").strip()
+        ncf  = clean_ncf(get("ENCF"))
         tot  = float((get("MontoTotal") or "0").replace(",", "."))
         fecha = None
         if fe := get("FechaEmision"):
@@ -341,11 +354,12 @@ def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
     if len(rnc) not in (9, 11):
         warns.append(f"⚠ RNC '{rnc}' tiene {len(rnc)} dígitos (esperado 9 u 11)")
 
-    ncf = (data.get("ncf") or "").upper()
+    ncf = clean_ncf(data.get("ncf"))
+    data["ncf"] = ncf  # guardar sin guiones ni espacios
     if ncf:
         expected = 11 if ncf.startswith("B") else 13 if ncf.startswith("E") else None
         if expected and len(ncf) != expected:
-            warns.append(f"⚠ NCF debería tener {expected} chars (tiene {len(ncf)})")
+            warns.append(f"⚠ NCF tiene {len(ncf)} chars (esperado {expected}: {ncf})")
 
     if (data.get("nivel_confianza") or "").upper() == "BAJO":
         warns.append("⚠ Imagen poco legible — verificar")
@@ -399,13 +413,15 @@ async def extract_invoice(image_bytes: bytes, filename: str) -> dict:
 # FORMATO DE MENSAJES
 # ──────────────────────────────────────────────────────────────
 
-def format_review_message(data: dict, location: str, category: str) -> str:
+def format_review_message(data: dict, location: str, category: str,
+                          mes: str | None = None) -> str:
     """Format the invoice data review message."""
     qr_badge  = "✅ QR verificado" if data.get("_qr_verified") else "🤖 Extraído por IA"
     conf      = data.get("nivel_confianza", "ALTO")
     conf_icon = "🟢" if conf == "ALTO" else "🟡" if conf == "MEDIO" else "🔴"
     warns     = data.get("_warnings") or []
     metodo    = METODO_LABELS.get(data.get("metodo_pago", ""), data.get("metodo_pago", "—"))
+    destino   = mes or mes_from_fecha(data)
 
     msg = (
         f"🧾 *Revisión de factura*\n"
@@ -416,7 +432,7 @@ def format_review_message(data: dict, location: str, category: str) -> str:
         f"🔢 NCF: `{data.get('ncf') or '—'}`\n"
         f"🏢 RNC: `{data.get('rnc') or '—'}`\n"
         f"📅 Fecha: {data.get('fecha_comprobante') or '—'}\n"
-        f"🗓️ Se guardará en: *606\\_{mes_from_fecha(data)}*\n"
+        f"🗓️ Se guardará en: *606\\_{destino}*\n"
         f"{'─'*30}\n"
         f"📦 Base sin ITBIS:  RD$ *{float(data.get('monto_sin_itbis') or 0):,.2f}*\n"
         f"🧾 ITBIS:           RD$ *{float(data.get('itbis') or 0):,.2f}*\n"
@@ -433,6 +449,33 @@ def format_review_message(data: dict, location: str, category: str) -> str:
     if warns:
         msg += f"\n{'─'*30}\n" + "\n".join(warns)
     return msg
+
+
+MES_NOMBRES = {
+    "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr", "05": "May", "06": "Jun",
+    "07": "Jul", "08": "Ago", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic",
+}
+
+def mes_label(ym: str) -> str:
+    """'2026-05' → 'May 2026' para mostrar en botones."""
+    try:
+        y, m = ym.split("-")
+        return f"{MES_NOMBRES.get(m, m)} {y}"
+    except Exception:
+        return ym
+
+def month_keyboard() -> InlineKeyboardMarkup:
+    """Botones para elegir a qué Excel (mes) va la factura."""
+    rows, row = [], []
+    for ym in month_options():
+        row.append(InlineKeyboardButton(f"📅 {mes_label(ym)}", callback_data=f"mes_{ym}"))
+        if len(row) == 3:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✨ Auto (por fecha de la factura)",
+                                      callback_data="mes_AUTO")])
+    return InlineKeyboardMarkup(rows)
 
 
 def confirm_keyboard() -> InlineKeyboardMarkup:
@@ -468,6 +511,23 @@ def current_mes() -> str:
 def get_mes(context) -> str:
     return context.user_data.get("mes_activo", current_mes())
 
+def clean_ncf(s: str) -> str:
+    """Normaliza el NCF: mayúsculas y solo letras/números (quita guiones, espacios).
+    Ej.: 'B01-0001234' → 'B010001234'  •  'E31-0000012345' → 'E310000012345'."""
+    return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+def month_options() -> list[str]:
+    """Meses sugeridos para los botones: los 3 anteriores, el actual y el siguiente."""
+    now = datetime.now()
+    y, m = now.year, now.month
+    opts = []
+    for delta in range(-3, 2):  # -3 .. +1
+        mm = m + delta
+        yy = y + (mm - 1) // 12
+        mm = (mm - 1) % 12 + 1
+        opts.append(f"{yy:04d}-{mm:02d}")
+    return opts
+
 def mes_from_fecha(data: dict) -> str:
     """
     Mes (YYYY-MM) al que pertenece la factura, según su fecha de comprobante.
@@ -483,6 +543,14 @@ def mes_from_fecha(data: dict) -> str:
 def is_allowed(update: Update) -> bool:
     if not ALLOWED_USERS: return True
     return update.effective_user.id in ALLOWED_USERS
+
+def resolve_mes(context, data: dict) -> str:
+    """Mes destino de la factura: el elegido con los botones, o automático
+    (según la fecha del comprobante) si el usuario eligió 'Auto'."""
+    elegido = context.user_data.get("mes_elegido")
+    if elegido and elegido != "AUTO":
+        return elegido
+    return mes_from_fecha(data)
 
 def user_label(update: Update) -> str:
     """Nombre legible de quien subió la factura (para registrar en el Excel)."""
@@ -500,27 +568,47 @@ def user_label(update: Update) -> str:
 # ──────────────────────────────────────────────────────────────
 
 async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start: ask for location. If a photo was sent, remember it for later."""
+    """Inicio: preguntar a qué mes (Excel) va la factura.
+    Si llegó una foto directamente, se guarda y se procesa más adelante."""
     if not is_allowed(update): return ConversationHandler.END
 
     # Si entró enviando una foto directamente, la guardamos y la procesamos
-    # después de elegir ubicación/categoría (no se la pedimos de nuevo).
+    # después de elegir mes/ubicación/categoría (no se la pedimos de nuevo).
     if update.message and update.message.photo:
         context.user_data["pending_photo_id"] = update.message.photo[-1].file_id
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}")
-        for loc in LOCATIONS
-    ]])
     if update.message:
         intro = "🧾 *Nueva factura*"
         if context.user_data.get("pending_photo_id"):
             intro = "🧾 *Foto recibida*"
         await update.message.reply_text(
-            f"{intro}\n\n¿Dónde fue la compra?",
-            reply_markup=keyboard,
+            f"{intro}\n\n📅 ¿A qué mes (Excel) quieres agregar la factura?",
+            reply_markup=month_keyboard(),
             parse_mode="Markdown",
         )
+    return S_MONTH
+
+
+async def got_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibido el mes elegido → preguntar ubicación."""
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data.replace("mes_", "")
+    context.user_data["mes_elegido"] = choice  # 'YYYY-MM' o 'AUTO'
+
+    etiqueta = "✨ Automático (por fecha de la factura)" if choice == "AUTO" \
+        else f"📅 {mes_label(choice)}"
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}")
+        for loc in LOCATIONS
+    ]])
+    await query.edit_message_text(
+        f"{etiqueta}\n\n¿Dónde fue la compra?",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
     return S_LOCATION
 
 
@@ -594,7 +682,7 @@ async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
         return ConversationHandler.END
 
     context.user_data["pending_invoice"] = data
-    msg = format_review_message(data, location, category)
+    msg = format_review_message(data, location, category, resolve_mes(context, data))
     await reply_to.reply_text(msg, reply_markup=confirm_keyboard(), parse_mode="Markdown")
     return S_CONFIRM
 
@@ -615,7 +703,7 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data     = context.user_data.get("pending_invoice", {})
     location = context.user_data.get("location", "—")
     category = context.user_data.get("category", "—")
-    mes      = mes_from_fecha(data)
+    mes      = resolve_mes(context, data)
 
     # El mes recién guardado pasa a ser el activo para /resumen, /lista, etc.
     context.user_data["mes_activo"] = mes
@@ -654,7 +742,7 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     # Clean up user data
-    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id"):
+    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id", "mes_elegido"):
         context.user_data.pop(key, None)
 
     return ConversationHandler.END
@@ -667,7 +755,7 @@ async def confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await query.edit_message_text("❌ Factura cancelada. Usa /nueva para empezar de nuevo.")
 
-    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id"):
+    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id", "mes_elegido"):
         context.user_data.pop(key, None)
 
     return ConversationHandler.END
@@ -696,7 +784,7 @@ async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
         data     = context.user_data.get("pending_invoice", {})
         location = context.user_data.get("location", "—")
         category = context.user_data.get("category", "—")
-        msg      = format_review_message(data, location, category)
+        msg      = format_review_message(data, location, category, resolve_mes(context, data))
         await query.edit_message_text(msg, reply_markup=confirm_keyboard(), parse_mode="Markdown")
         return S_CONFIRM
 
@@ -756,7 +844,7 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif field == "propina":
             data["propina"] = float(new_val.replace(",", ".").replace("RD$", "").strip())
         elif field == "ncf":
-            data["ncf"] = new_val.upper()
+            data["ncf"] = clean_ncf(new_val)
         elif field == "rnc":
             data["rnc"] = re.sub(r"\D", "", new_val)
         elif field == "nombre":
@@ -797,14 +885,14 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop("edit_field", None)
 
     # Back to review
-    msg = format_review_message(data, location, category)
+    msg = format_review_message(data, location, category, resolve_mes(context, data))
     await update.message.reply_text(msg, reply_markup=confirm_keyboard(), parse_mode="Markdown")
     return S_CONFIRM
 
 
 async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the entire conversation."""
-    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id"):
+    for key in ("pending_invoice", "location", "category", "edit_field", "pending_photo_id", "mes_elegido"):
         context.user_data.pop(key, None)
     if update.message:
         await update.message.reply_text("Operación cancelada. Usa /nueva para empezar.")
@@ -815,16 +903,16 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # COMANDOS DE CONSULTA (fuera del conversation handler)
 # ──────────────────────────────────────────────────────────────
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update): return
+async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pantalla de bienvenida tras desbloquear con la contraseña."""
     mes = get_mes(context)
     await update.message.reply_text(
-        f"👋 *Bot 606 DGII*\n\n"
+        f"🔓 *Acceso concedido — Bot 606 DGII*\n\n"
         f"Mes activo: *{mes}*\n\n"
         f"*Registrar facturas:*\n"
         f"📸 Envía una *foto* de la factura (o usa /nueva)\n"
-        f"   → eliges ubicación y categoría, reviso los datos y la guardo\n"
-        f"   en el Excel del mes de su fecha.\n\n"
+        f"   → eliges *el mes*, ubicación y categoría; reviso los datos\n"
+        f"   y la guardo en el Excel que corresponda.\n\n"
         f"*Consultas:*\n"
         f"📊 /resumen — totales del mes\n"
         f"📋 /lista — todas las facturas\n"
@@ -834,6 +922,47 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📅 /mes YYYY-MM — cambiar mes activo",
         parse_mode="Markdown",
     )
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    await show_welcome(update, context)
+
+
+async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Puerta de entrada: exige la contraseña antes de usar el bot.
+    Corre en el grupo -1 (antes que todo). Si el usuario no está desbloqueado:
+      • si envía la contraseña → desbloquea y muestra el menú.
+      • cualquier otra cosa    → pide la contraseña.
+    Detiene la propagación con ApplicationHandlerStop en ambos casos."""
+    user = update.effective_user
+    if user is None:
+        return  # updates sin usuario (no aplican)
+
+    # La lista blanca de IDs (ALLOWED_USERS) sigue mandando si está configurada.
+    if ALLOWED_USERS and user.id not in ALLOWED_USERS:
+        raise ApplicationHandlerStop
+
+    if context.user_data.get("unlocked"):
+        return  # ya desbloqueado → dejar pasar a los demás handlers
+
+    text = (update.message.text or "").strip() if (update.message and update.message.text) else ""
+    if text == BOT_PASSWORD:
+        context.user_data["unlocked"] = True
+        await show_welcome(update, context)
+        raise ApplicationHandlerStop
+
+    # No desbloqueado y no es la contraseña → pedirla y cortar.
+    if update.message:
+        await update.message.reply_text(
+            "🔒 *Bot privado.*\nEnvía la contraseña para comenzar.",
+            parse_mode="Markdown",
+        )
+    elif update.callback_query:
+        await update.callback_query.answer(
+            "🔒 Envía la contraseña primero.", show_alert=True
+        )
+    raise ApplicationHandlerStop
 
 
 async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1132,6 +1261,9 @@ def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Puerta de contraseña: corre primero (grupo -1) en cada update.
+    app.add_handler(TypeHandler(Update, auth_gate), group=-1)
+
     # Conversation handler for the guided capture flow
     conv = ConversationHandler(
         entry_points=[
@@ -1140,6 +1272,9 @@ def main():
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
         ],
         states={
+            S_MONTH: [
+                CallbackQueryHandler(got_month, pattern="^mes_"),
+            ],
             S_LOCATION: [
                 CallbackQueryHandler(got_location, pattern="^loc_"),
             ],
