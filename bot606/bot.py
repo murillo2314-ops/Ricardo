@@ -141,21 +141,27 @@ def init_db():
                 advertencias    TEXT,
                 needs_review    INTEGER DEFAULT 0,
                 raw_json        TEXT,
+                usuario         TEXT,
                 created_at      TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Migración: agregar 'usuario' si la tabla ya existía sin esa columna.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(facturas)")}
+        if "usuario" not in cols:
+            conn.execute("ALTER TABLE facturas ADD COLUMN usuario TEXT")
         conn.commit()
 
 
-def save_factura(mes: str, location: str, category: str, data: dict) -> int:
+def save_factura(mes: str, location: str, category: str, data: dict,
+                 usuario: str = "") -> int:
     with get_db() as conn:
         cur = conn.execute("""
             INSERT INTO facturas
               (mes, location, category, filename, rnc, ncf, nombre,
                fecha_comp, fecha_pago, total, itbis, base, propina,
                metodo, tipo_cf, observaciones, qr_verified,
-               nivel_confianza, advertencias, needs_review, raw_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               nivel_confianza, advertencias, needs_review, raw_json, usuario)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             mes, location, category,
             data.get("_filename", ""),
@@ -176,6 +182,7 @@ def save_factura(mes: str, location: str, category: str, data: dict) -> int:
             json.dumps(data.get("_warnings") or []),
             1 if data.get("_needs_review") else 0,
             json.dumps(data),
+            usuario,
         ))
         conn.commit()
         return cur.lastrowid
@@ -477,6 +484,16 @@ def is_allowed(update: Update) -> bool:
     if not ALLOWED_USERS: return True
     return update.effective_user.id in ALLOWED_USERS
 
+def user_label(update: Update) -> str:
+    """Nombre legible de quien subió la factura (para registrar en el Excel)."""
+    u = update.effective_user
+    if not u:
+        return ""
+    if u.username:
+        return f"@{u.username}"
+    nombre = " ".join(filter(None, [u.first_name, u.last_name])).strip()
+    return nombre or str(u.id)
+
 
 # ──────────────────────────────────────────────────────────────
 # CONVERSATION: FLUJO DE CAPTURA
@@ -603,7 +620,7 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # El mes recién guardado pasa a ser el activo para /resumen, /lista, etc.
     context.user_data["mes_activo"] = mes
 
-    fac_id = save_factura(mes, location, category, data)
+    fac_id = save_factura(mes, location, category, data, user_label(update))
 
     # Totals so far
     facturas = get_facturas(mes)
@@ -965,7 +982,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
     ws = wb.active
     ws.title = "Formato 606"
 
-    ws.merge_cells("A1:T1")
+    ws.merge_cells("A1:U1")
     c = ws["A1"]
     c.value = f"FORMATO 606 — COMPRAS — {mes}"
     c.font = Font(name="Calibri", bold=True, color="FFFFFF", size=13)
@@ -973,7 +990,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    ws.merge_cells("A2:T2")
+    ws.merge_cells("A2:U2")
     c = ws["A2"]
     rev = sum(1 for f in facturas if f.get("needs_review"))
     c.value = (f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  "
@@ -990,6 +1007,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
         ("Propina\n10%",11),("Mét.\nPago",7),("ITBIS\nRet.",10),
         ("ITBIS\nPerc.",10),("T.Ret\nISR",7),("Mto.\nRenta",11),
         ("Mto.\nServ.",12),("Mto.\nBienes",11),("Observaciones",35),
+        ("Subido\npor",16),
     ]
     for col, (hdr, w) in enumerate(COLS, 1):
         c = ws.cell(row=3, column=col, value=hdr)
@@ -1022,19 +1040,12 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
     def rnc_tipo(rnc):
         return "2" if len(re.sub(r"\D","",str(rnc or "")))==11 else "1"
 
-    # Agrupar por proveedor/RNC: todas las facturas del mismo emisor juntas.
-    # Los grupos se ordenan por la fecha más antigua del proveedor;
-    # dentro de cada grupo, orden cronológico. (Misma regla del 606 de mayo.)
-    def _clave(f):
-        return re.sub(r"\D","",str(f.get("rnc") or "")) or (f.get("nombre") or "")
-    def _fecha(f):
-        return f.get("fecha_comp") or ""
-    primera = {}
-    for f in facturas:
-        k = _clave(f)
-        if k not in primera or _fecha(f) < primera[k]:
-            primera[k] = _fecha(f)
-    facturas = sorted(facturas, key=lambda f: (primera[_clave(f)], _clave(f), _fecha(f)))
+    # Orden cronológico por fecha de comprobante; a igual fecha, por orden de
+    # envío (id ascendente). No se agrupa por proveedor.
+    facturas = sorted(
+        facturas,
+        key=lambda f: (f.get("fecha_comp") or "", f.get("id") or 0),
+    )
 
     for seq, fac in enumerate(facturas, 1):
         row = seq + 3
@@ -1084,6 +1095,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
             "0.00","0.00","","0.00",
             f"{base:.2f}","0.00",
             obs,
+            fac.get("usuario","") or "",
         ]
         CENTER={2,3,5,6,7,8,13,16}; RIGHT={1,9,10,11,12,14,15,17,18,19}
         for col,val in enumerate(vals,1):
@@ -1102,7 +1114,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
     for off,key in enumerate(["base","itbis","total","propina"]):
         c=ws.cell(row=tr,column=9+off,value=f"{totals[key]:.2f}")
         c.font=font(bold=True,size=10); c.fill=fill("FFC000"); c.alignment=aln("right")
-    for col in range(13,21):
+    for col in range(13,22):
         ws.cell(row=tr,column=col).fill=fill("FFC000")
     ws.row_dimensions[tr].height=20
     ws.freeze_panes="A4"
