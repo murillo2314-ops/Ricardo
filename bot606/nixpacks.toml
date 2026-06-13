@@ -1,5 +1,0 @@
-# Railway / Nixpacks: librerías de sistema necesarias.
-# - libzbar0    → pyzbar (decodificación de códigos QR de las e-CF)
-# - libGL/glib  → opencv (detector QR de respaldo)
-[phases.setup]
-aptPkgs = ["libzbar0", "libgl1", "libglib2.0-0"]
