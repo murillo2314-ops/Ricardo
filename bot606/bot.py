@@ -208,6 +208,15 @@ def get_facturas(mes: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def meses_con_facturas() -> list[str]:
+    """Meses (YYYY-MM) que ya tienen facturas guardadas, del más reciente al más viejo."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT mes, COUNT(*) n FROM facturas GROUP BY mes ORDER BY mes DESC"
+        ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
 def delete_last(mes: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
@@ -475,6 +484,23 @@ def month_keyboard() -> InlineKeyboardMarkup:
         rows.append(row)
     rows.append([InlineKeyboardButton("✨ Auto (por fecha de la factura)",
                                       callback_data="mes_AUTO")])
+    return InlineKeyboardMarkup(rows)
+
+
+def mes_picker(prefix: str) -> InlineKeyboardMarkup | None:
+    """Botones con los meses que ya tienen facturas, para /resumen y /exportar.
+    `prefix` distingue la acción (p.ej. 'res' o 'exp'). Devuelve None si no hay datos."""
+    meses = meses_con_facturas()
+    if not meses:
+        return None
+    rows, row = [], []
+    for ym, n in meses:
+        row.append(InlineKeyboardButton(
+            f"📅 {mes_label(ym)} ({n})", callback_data=f"{prefix}_{ym}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
     return InlineKeyboardMarkup(rows)
 
 
@@ -965,12 +991,11 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raise ApplicationHandlerStop
 
 
-async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update): return
-    mes = get_mes(context)
+async def _render_resumen(reply_to, mes: str):
+    """Genera y envía el resumen del mes indicado."""
     facturas = get_facturas(mes)
     if not facturas:
-        await update.message.reply_text(f"Sin facturas para *{mes}*.", parse_mode="Markdown")
+        await reply_to.reply_text(f"Sin facturas para *{mes}*.", parse_mode="Markdown")
         return
 
     total  = sum(f["total"]   for f in facturas)
@@ -992,7 +1017,7 @@ async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loc_lines = "\n".join(f"  📍 {k}: RD$ {v:,.2f}" for k, v in sorted(by_loc.items()))
     cat_lines = "\n".join(f"  🏷️ {k}: RD$ {v:,.2f}" for k, v in sorted(by_cat.items()))
 
-    await update.message.reply_text(
+    await reply_to.reply_text(
         f"📊 *Resumen {mes}*\n\n"
         f"Facturas: *{len(facturas)}*  •  QR: {qr_v}  •  ⚠️ Revisión: {rev}\n\n"
         f"Base sin ITBIS:  RD$ *{base:,.2f}*\n"
@@ -1004,6 +1029,26 @@ async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*Por categoría:*\n{cat_lines}",
         parse_mode="Markdown",
     )
+
+
+async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    kb = mes_picker("res")
+    if kb is None:
+        await update.message.reply_text("Aún no hay facturas guardadas.")
+        return
+    await update.message.reply_text(
+        "📊 ¿De qué mes quieres el resumen?", reply_markup=kb
+    )
+
+
+async def on_pick_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mes = query.data.replace("res_", "")
+    context.user_data["mes_activo"] = mes
+    await query.edit_message_text(f"📊 Resumen de *{mes}*…", parse_mode="Markdown")
+    await _render_resumen(query.message, mes)
 
 
 async def cmd_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1046,21 +1091,40 @@ async def cmd_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
-async def cmd_exportar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update): return
-    mes = get_mes(context)
+async def _render_exportar(reply_to, mes: str):
+    """Genera el Excel del mes indicado y lo envía como documento."""
     facturas = get_facturas(mes)
     if not facturas:
-        await update.message.reply_text(f"Sin facturas para *{mes}*.", parse_mode="Markdown")
+        await reply_to.reply_text(f"Sin facturas para *{mes}*.", parse_mode="Markdown")
         return
 
-    await update.message.reply_text(f"⏳ Generando Excel *{mes}*...", parse_mode="Markdown")
+    await reply_to.reply_text(f"⏳ Generando Excel *{mes}*...", parse_mode="Markdown")
     xlsx = build_excel(facturas, mes)
-    await update.message.reply_document(
+    await reply_to.reply_document(
         document=io.BytesIO(xlsx),
         filename=f"606_{mes}.xlsx",
         caption=f"✅ Formato 606 — {mes} — {len(facturas)} facturas",
     )
+
+
+async def cmd_exportar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    kb = mes_picker("exp")
+    if kb is None:
+        await update.message.reply_text("Aún no hay facturas guardadas.")
+        return
+    await update.message.reply_text(
+        "📥 ¿Qué mes quieres exportar?", reply_markup=kb
+    )
+
+
+async def on_pick_exportar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    mes = query.data.replace("exp_", "")
+    context.user_data["mes_activo"] = mes
+    await query.edit_message_text(f"📥 Exportando *{mes}*…", parse_mode="Markdown")
+    await _render_exportar(query.message, mes)
 
 
 async def cmd_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1311,6 +1375,10 @@ def main():
     app.add_handler(CommandHandler("exportar",   cmd_exportar))
     app.add_handler(CommandHandler("borrar",     cmd_borrar))
     app.add_handler(CommandHandler("mes",        cmd_mes))
+
+    # Selección de mes para /resumen y /exportar (botones fuera del flujo)
+    app.add_handler(CallbackQueryHandler(on_pick_resumen,  pattern="^res_"))
+    app.add_handler(CallbackQueryHandler(on_pick_exportar, pattern="^exp_"))
 
     log.info("Bot iniciado con flujo guiado.")
     app.run_polling(drop_pending_updates=True)
