@@ -87,18 +87,15 @@ BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
 # debe ser el del EMISOR de la factura.
 CONSUMER_RNC = os.environ.get("CONSUMER_RNC", "131545157")
 
-# Conversation states
+# Conversation states  (simplificado: foto → ubicación → categoría → confirmar)
 (
-    S_MONTH,
+    S_PHOTO,
     S_LOCATION,
     S_CATEGORY,
-    S_BATCH_MODE,
-    S_PHOTO,
-    S_TIPO_GASTO,
     S_CONFIRM,
     S_EDIT_SELECT,
     S_EDIT_VALUE,
-) = range(9)
+) = range(6)
 
 LOCATIONS   = ["Punta Cana", "Santo Domingo"]
 CATEGORIES  = ["Casa", "Obra"]
@@ -125,16 +122,17 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 EDITABLE_FIELDS = {
-    "total":    "💰 Total",
-    "itbis":    "🧾 ITBIS",
-    "base":     "📦 Base",
-    "propina":  "🍽️ Propina",
-    "ncf":      "🔢 NCF",
-    "rnc":      "🏢 RNC",
-    "nombre":   "🏪 Nombre proveedor",
-    "fecha":    "📅 Fecha",
-    "metodo":   "💳 Método pago",
-    "obs":      "📝 Observaciones",
+    "total":      "💰 Total",
+    "itbis":      "🧾 ITBIS",
+    "base":       "📦 Base",
+    "propina":    "🍽️ Propina",
+    "ncf":        "🔢 NCF",
+    "rnc":        "🏢 RNC",
+    "nombre":     "🏪 Nombre proveedor",
+    "fecha":      "📅 Fecha",
+    "metodo":     "💳 Método pago",
+    "obs":        "📝 Observaciones",
+    "tipo_gasto": "🏷️ Tipo de gasto",
 }
 
 METODO_LABELS = {
@@ -495,8 +493,9 @@ async def extract_invoice(image_bytes: bytes, filename: str) -> dict:
 # ──────────────────────────────────────────────────────────────
 
 def format_review_message(data: dict, location: str, category: str,
-                          mes: str | None = None) -> str:
-    """Format the invoice data review message."""
+                          mes: str | None = None,
+                          tipo_gasto: str | None = None) -> str:
+    """Mensaje de revisión completo, listo para mostrar con confirm_keyboard."""
     qr_badge  = "✅ QR verificado" if data.get("_qr_verified") else "🤖 Extraído por IA"
     conf      = data.get("nivel_confianza", "ALTO")
     conf_icon = "🟢" if conf == "ALTO" else "🟡" if conf == "MEDIO" else "🔴"
@@ -513,7 +512,6 @@ def format_review_message(data: dict, location: str, category: str,
         f"🔢 NCF: `{data.get('ncf') or '—'}`\n"
         f"🏢 RNC: `{data.get('rnc') or '—'}`\n"
         f"📅 Fecha: {data.get('fecha_comprobante') or '—'}\n"
-        f"🗓️ Se guardará en: *606\\_{destino}*\n"
         f"{'─'*30}\n"
         f"📦 Base sin ITBIS:  RD$ *{float(data.get('monto_sin_itbis') or 0):,.2f}*\n"
         f"🧾 ITBIS:           RD$ *{float(data.get('itbis') or 0):,.2f}*\n"
@@ -525,6 +523,9 @@ def format_review_message(data: dict, location: str, category: str,
         f"{'─'*30}\n"
         f"{metodo}\n"
     )
+    if tipo_gasto:
+        tg_label = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
+        msg += f"🏷️ Tipo de gasto: *{tipo_gasto}* — {tg_label}\n"
     if data.get("observaciones"):
         msg += f"📝 {data['observaciones']}\n"
     if warns:
@@ -608,12 +609,27 @@ def tipo_gasto_keyboard(suggested: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def confirm_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Aceptar",  callback_data="confirm_accept"),
-        InlineKeyboardButton("✏️ Corregir", callback_data="confirm_edit"),
-        InlineKeyboardButton("❌ Cancelar", callback_data="confirm_cancel"),
-    ]])
+def confirm_keyboard(mes: str = "") -> InlineKeyboardMarkup:
+    mes_txt = f"📅 {mes_label(mes)} — cambiar mes" if mes else "📅 Cambiar mes"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Aceptar",  callback_data="confirm_accept"),
+            InlineKeyboardButton("✏️ Corregir", callback_data="confirm_edit"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="confirm_cancel"),
+        ],
+        [InlineKeyboardButton(mes_txt, callback_data="confirm_change_mes")],
+    ])
+
+
+def tipo_gasto_edit_keyboard(selected: str = "") -> InlineKeyboardMarkup:
+    rows = []
+    for code, label in TIPO_GASTO_OPTIONS:
+        mark = "✅ " if code == selected else ""
+        rows.append([InlineKeyboardButton(
+            f"{mark}{code} – {label}", callback_data=f"edittg_{code}"
+        )])
+    rows.append([InlineKeyboardButton("↩️ Volver a revisión", callback_data="edittg_back")])
+    return InlineKeyboardMarkup(rows)
 
 
 def edit_keyboard() -> InlineKeyboardMarkup:
@@ -693,189 +709,55 @@ def user_label(update: Update) -> str:
     return nombre or str(u.id)
 
 
+def _CLEANUP(context):
+    """Limpia los datos de la factura activa del contexto."""
+    for key in ("pending_invoice", "location", "category", "tipo_gasto",
+                "edit_field", "pending_photo_id", "mes_elegido"):
+        context.user_data.pop(key, None)
+
+
+def _review_msg_and_kb(context) -> tuple[str, InlineKeyboardMarkup]:
+    """Genera el mensaje de revisión y el teclado de confirmación actuales."""
+    data     = context.user_data.get("pending_invoice", {})
+    location = context.user_data.get("location", "—")
+    category = context.user_data.get("category", "—")
+    tg       = context.user_data.get("tipo_gasto", "02")
+    mes      = resolve_mes(context, data)
+    msg = format_review_message(data, location, category, mes, tg)
+    return msg, confirm_keyboard(mes)
+
+
 # ──────────────────────────────────────────────────────────────
 # CONVERSATION: FLUJO DE CAPTURA
+# Flujo: foto → ubicación → categoría → revisión+confirmar
 # ──────────────────────────────────────────────────────────────
 
 async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicio: preguntar a qué mes (Excel) va la factura.
-    Si llegó una foto directamente, se guarda y se procesa más adelante."""
+    """Inicio del flujo. Si llegó foto directamente, la procesa ya."""
     if not is_allowed(update): return ConversationHandler.END
-
-    # Si entró enviando una foto directamente, la guardamos y la procesamos
-    # después de elegir mes/ubicación/categoría (no se la pedimos de nuevo).
+    _CLEANUP(context)
     if update.message and update.message.photo:
-        context.user_data["pending_photo_id"] = update.message.photo[-1].file_id
-
-    if update.message:
-        intro = "🧾 *Nueva factura*"
-        if context.user_data.get("pending_photo_id"):
-            intro = "🧾 *Foto recibida*"
-        await update.message.reply_text(
-            f"{intro}\n\n📅 ¿A qué mes (Excel) quieres agregar la factura?",
-            reply_markup=month_keyboard(),
-            parse_mode="Markdown",
-        )
-    return S_MONTH
-
-
-async def got_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibido el mes elegido → preguntar cuántas facturas se van a subir."""
-    query = update.callback_query
-    await query.answer()
-
-    choice = query.data.replace("mes_", "")
-    context.user_data["mes_elegido"] = choice  # 'YYYY-MM' o 'AUTO'
-
-    etiqueta = "✨ Automático (por fecha de la factura)" if choice == "AUTO" \
-        else f"📅 {mes_label(choice)}"
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("1️⃣ Una factura",    callback_data="batch_single"),
-            InlineKeyboardButton("📚 Varias facturas", callback_data="batch_multi"),
-        ],
-        [InlineKeyboardButton("← Cambiar mes", callback_data="back_to_month")],
-    ])
-    await query.edit_message_text(
-        f"{etiqueta}\n\n¿Cuántas facturas vas a subir?",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
-    )
-    return S_BATCH_MODE
-
-
-async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Received location → ask for category."""
-    query = update.callback_query
-    await query.answer()
-
-    location = query.data.replace("loc_", "")
-    context.user_data["location"] = location
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}") for cat in CATEGORIES],
-        [InlineKeyboardButton("← Cambiar ubicación", callback_data="back_to_location")],
-    ])
-    await query.edit_message_text(
-        f"📍 *{location}*\n\n¿Para qué es la compra?",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
-    )
-    return S_CATEGORY
-
-
-async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Received category → show review + ask tipo de gasto."""
-    query = update.callback_query
-    await query.answer()
-
-    category = query.data.replace("cat_", "")
-    context.user_data["category"] = category
-    location = context.user_data.get("location", "—")
-    data     = context.user_data.get("pending_invoice", {})
-
-    suggested = suggest_tipo_gasto(data)
-    msg = format_review_message(data, location, category, resolve_mes(context, data))
-    tg_sugg = TIPO_GASTO_DICT.get(suggested, "")
-    msg += f"\n\n🏷️ *¿Cuál es el tipo de gasto?*\n💡 Sugerencia: *{suggested}* — {tg_sugg}"
-    await query.edit_message_text(
-        msg,
-        reply_markup=tipo_gasto_keyboard(suggested),
-        parse_mode="Markdown",
-    )
-    return S_TIPO_GASTO
-
-
-async def got_batch_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Modo elegido → pedir la(s) foto(s). La ubicación/categoría se preguntan
-    DESPUÉS de cada foto, para clasificar factura por factura."""
-    query = update.callback_query
-    await query.answer()
-
-    mode = query.data.replace("batch_", "")  # "single" or "multi"
-    context.user_data["batch_mode"] = (mode == "multi")
-
-    # Si hay foto pendiente (entró enviando foto directamente), procesarla ya.
-    pending_id = context.user_data.pop("pending_photo_id", None)
-    if pending_id:
-        return await _extract_and_review(query.message, context, pending_id)
-
-    hint = ("Envía las fotos de las facturas (una por una). Después de cada una "
-            "te pregunto dónde fue la compra.") if mode == "multi" \
-        else "Envía la foto de la factura."
-    await query.edit_message_text(f"📸 {hint}")
+        return await _process_photo(update.message, context, update.message.photo[-1].file_id)
+    await update.message.reply_text("📸 Envía la foto de la factura.")
     return S_PHOTO
 
 
-async def back_to_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← Volver al selector de mes."""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "📅 ¿A qué mes (Excel) quieres agregar la factura?",
-        reply_markup=month_keyboard(),
-    )
-    return S_MONTH
-
-
-async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← Volver a la pregunta de ubicación (después de la foto)."""
-    query = update.callback_query
-    await query.answer()
-    data   = context.user_data.get("pending_invoice", {})
-    nombre = data.get("nombre_proveedor") or "Factura leída"
-    total  = float(data.get("total_facturado") or 0)
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
-    ]])
-    await query.edit_message_text(
-        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
-    )
-    return S_LOCATION
-
-
-async def back_to_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← Volver a la pregunta de categoría."""
-    query = update.callback_query
-    await query.answer()
-    location = context.user_data.get("location", "—")
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}") for cat in CATEGORIES],
-        [InlineKeyboardButton("← Cambiar ubicación", callback_data="back_to_location")],
-    ])
-    await query.edit_message_text(
-        f"📍 *{location}*\n\n¿Para qué es la compra?",
-        reply_markup=keyboard,
-        parse_mode="Markdown",
-    )
-    return S_CATEGORY
-
-
-async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
-                              file_id: str) -> int:
-    """Descarga la foto, extrae datos, verifica duplicados y pregunta la ubicación."""
-    processing_msg = await reply_to.reply_text("⏳ Analizando factura con IA...")
-
+async def _process_photo(reply_to, context: ContextTypes.DEFAULT_TYPE, file_id: str) -> int:
+    """Descarga la foto, extrae datos con IA, verifica duplicados y pregunta la ubicación."""
+    proc = await reply_to.reply_text("⏳ Analizando factura con IA...")
     file = await context.bot.get_file(file_id)
     buf  = io.BytesIO()
     await file.download_to_memory(buf)
-    image_bytes = buf.getvalue()
-
-    data = await extract_invoice(image_bytes, f"{file_id}.jpg")
-
-    await processing_msg.delete()
+    data = await extract_invoice(buf.getvalue(), f"{file_id}.jpg")
+    await proc.delete()
 
     if data.get("_error"):
         await reply_to.reply_text(
             f"❌ No pude leer la factura: {data['_error']}\n\n"
-            "Intenta con mejor iluminación o más cerca. Usa /nueva para intentar de nuevo.",
+            "Intenta con mejor iluminación o más cerca.",
         )
         return ConversationHandler.END
 
-    # Verificar duplicados por NCF
     ncf = data.get("ncf", "")
     if ncf:
         dup = check_duplicate_ncf(ncf)
@@ -884,194 +766,186 @@ async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
                 f"⚠️ *Factura duplicada — no procesada*\n\n"
                 f"El NCF `{ncf}` ya existe en el sistema:\n"
                 f"🏪 {dup.get('nombre') or '?'}  •  RD$ {dup.get('total', 0):,.2f}  ({dup.get('mes', '')})\n\n"
-                f"Si es una factura diferente, corrígela con /nueva.",
+                f"Envía otra foto o usa el menú.",
                 parse_mode="Markdown",
             )
-            # En modo lote, quedarse esperando la siguiente foto
-            if context.user_data.get("batch_mode"):
-                return S_PHOTO
-            return ConversationHandler.END
+            return S_PHOTO
 
     context.user_data["pending_invoice"] = data
+    context.user_data["tipo_gasto"] = suggest_tipo_gasto(data)
 
-    # Leída la factura → ahora sí preguntar dónde fue la compra.
-    return await _ask_location(reply_to, context)
-
-
-async def _ask_location(reply_to, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Pregunta la ubicación de la factura recién leída (paso posterior a la foto)."""
-    data   = context.user_data.get("pending_invoice", {})
     nombre = data.get("nombre_proveedor") or "Factura leída"
     total  = float(data.get("total_facturado") or 0)
-    keyboard = InlineKeyboardMarkup([[
+    kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
     ]])
     await reply_to.reply_text(
         f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
-        reply_markup=keyboard,
+        reply_markup=kb,
         parse_mode="Markdown",
     )
     return S_LOCATION
 
 
 async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Received photo in S_PHOTO state → extract → ask location."""
+    """Foto recibida en estado S_PHOTO."""
     if not is_allowed(update): return ConversationHandler.END
-    return await _extract_and_review(
-        update.message, context, update.message.photo[-1].file_id
-    )
+    return await _process_photo(update.message, context, update.message.photo[-1].file_id)
 
 
-async def got_tipo_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Tipo de gasto seleccionado → mostrar revisión completa con botones de confirmación."""
+async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ubicación elegida → preguntar categoría."""
     query = update.callback_query
     await query.answer()
-
-    codigo = query.data.replace("tg_", "")
-    context.user_data["tipo_gasto"] = codigo
-
-    data     = context.user_data.get("pending_invoice", {})
-    location = context.user_data.get("location", "—")
-    category = context.user_data.get("category", "—")
-
-    tg_label = TIPO_GASTO_DICT.get(codigo, "")
-    msg = format_review_message(data, location, category, resolve_mes(context, data))
-    msg += f"\n\n🏷️ *Tipo de gasto:* {codigo} — {tg_label}\n\n✅ ¿Confirmas esta factura?"
-
+    location = query.data.replace("loc_", "")
+    context.user_data["location"] = location
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}") for cat in CATEGORIES],
+        [InlineKeyboardButton("← Cambiar ubicación", callback_data="back_to_location")],
+    ])
     await query.edit_message_text(
-        msg, reply_markup=confirm_keyboard(), parse_mode="Markdown"
+        f"📍 *{location}*\n\n🏷️ ¿Para qué es la compra?",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
+    return S_CATEGORY
+
+
+async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← Volver a la pregunta de ubicación."""
+    query = update.callback_query
+    await query.answer()
+    data   = context.user_data.get("pending_invoice", {})
+    nombre = data.get("nombre_proveedor") or "Factura leída"
+    total  = float(data.get("total_facturado") or 0)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
+    ]])
+    await query.edit_message_text(
+        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
+    return S_LOCATION
+
+
+async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Categoría elegida → mostrar revisión completa con tipo de gasto auto-detectado."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["category"] = query.data.replace("cat_", "")
+    msg, kb = _review_msg_and_kb(context)
+    await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
+    return S_CONFIRM
+
+
+async def on_confirm_change_mes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Botón 'Cambiar mes' en la revisión → mostrar selector de mes."""
+    query = update.callback_query
+    await query.answer()
+    rows, row = [], []
+    for ym in month_options():
+        row.append(InlineKeyboardButton(f"📅 {mes_label(ym)}", callback_data=f"cmes_{ym}"))
+        if len(row) == 3:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✨ Auto (por fecha de la factura)", callback_data="cmes_AUTO")])
+    rows.append([InlineKeyboardButton("← Volver a revisión", callback_data="cmes_back")])
+    await query.edit_message_text(
+        "📅 ¿A qué mes quieres asignar esta factura?",
+        reply_markup=InlineKeyboardMarkup(rows),
     )
     return S_CONFIRM
 
 
+async def on_cmes_picked(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Mes elegido desde la revisión → volver a revisión con mes actualizado."""
+    query = update.callback_query
+    await query.answer()
+    val = query.data.replace("cmes_", "")
+    if val != "back":
+        context.user_data["mes_elegido"] = val
+    msg, kb = _review_msg_and_kb(context)
+    await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
+    return S_CONFIRM
+
+
 async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Save invoice and end conversation."""
+    """Guardar la factura."""
     query = update.callback_query
     await query.answer()
 
-    data     = context.user_data.get("pending_invoice", {})
-    location = context.user_data.get("location", "—")
-    category = context.user_data.get("category", "—")
-    mes      = resolve_mes(context, data)
-
-    # El mes recién guardado pasa a ser el activo para /resumen, /lista, etc.
-    context.user_data["mes_activo"] = mes
-
+    data       = context.user_data.get("pending_invoice", {})
+    location   = context.user_data.get("location", "—")
+    category   = context.user_data.get("category", "—")
+    mes        = resolve_mes(context, data)
     tipo_gasto = context.user_data.get("tipo_gasto", "02")
+
+    context.user_data["mes_activo"] = mes
     fac_id = save_factura(mes, location, category, data, user_label(update), tipo_gasto)
 
-    # Totals so far
-    facturas = get_facturas(mes)
+    facturas  = get_facturas(mes)
     total_mes = sum(f["total"] for f in facturas)
 
-    # Regenerar el Excel del mes y sincronizarlo con Google Drive.
     drive_line = ""
     if drive_sync.is_configured():
         try:
             xlsx = build_excel(facturas, mes)
-            link = await asyncio.to_thread(
-                drive_sync.sync_excel, xlsx, f"606_{mes}.xlsx"
-            )
-            if link:
-                drive_line = f"\n☁️ [Excel actualizado en Drive]({link})\n"
-            else:
-                drive_line = "\n⚠️ No se pudo subir a Drive (revisar config).\n"
+            link = await asyncio.to_thread(drive_sync.sync_excel, xlsx, f"606_{mes}.xlsx")
+            drive_line = f"\n☁️ [Excel actualizado en Drive]({link})\n" if link else "\n⚠️ No se pudo subir a Drive.\n"
         except Exception as e:
-            log.error("Error sincronizando Drive: %s", e)
+            log.error("Drive sync error: %s", e)
             drive_line = "\n⚠️ Error al subir a Drive.\n"
 
-    tg_label = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
+    tg_label  = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
     saved_msg = (
         f"✅ *Factura #{fac_id} guardada*\n\n"
         f"🏪 {data.get('nombre_proveedor','?')}\n"
         f"💰 RD$ {float(data.get('total_facturado',0)):,.2f}\n"
         f"🏷️ {tipo_gasto} — {tg_label}\n"
-        f"{drive_line}\n"
-        f"📊 *{mes}* — {len(facturas)} facturas  •  Total RD$ {total_mes:,.2f}"
+        f"📊 *{mes}* — {len(facturas)} facturas  •  RD$ {total_mes:,.2f}"
+        f"{drive_line}"
     )
-
-    batch = context.user_data.get("batch_mode", False)
-    if batch:
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📸 Siguiente factura", callback_data="batch_next"),
-            InlineKeyboardButton("✅ Terminar lote",     callback_data="batch_done"),
-        ]])
-        await query.edit_message_text(
-            saved_msg + "\n\n📸 Envía la siguiente factura o toca *Terminar lote*.",
-            reply_markup=kb,
-            parse_mode="Markdown",
-            disable_web_page_preview=True,
-        )
-        # Limpiar los datos de ESTA factura; mantener mes_elegido y batch_mode
-        # para que el lote siga yendo al mismo Excel y pidiendo foto por foto.
-        for key in ("pending_invoice", "location", "category", "edit_field",
-                    "pending_photo_id", "tipo_gasto"):
-            context.user_data.pop(key, None)
-        return S_PHOTO
-
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📸 Subir otra factura", callback_data="otra_factura"),
+        InlineKeyboardButton("✅ Terminar",           callback_data="fin_lote"),
+    ]])
     await query.edit_message_text(
-        saved_msg + "\n\nUsa *Nueva factura* para registrar otra o *Resumen* para ver el mes.",
-        parse_mode="Markdown",
-        disable_web_page_preview=True,
+        saved_msg, reply_markup=kb, parse_mode="Markdown", disable_web_page_preview=True
     )
-    for key in ("pending_invoice", "location", "category", "edit_field",
-                "pending_photo_id", "mes_elegido", "tipo_gasto", "batch_mode"):
-        context.user_data.pop(key, None)
-    return ConversationHandler.END
+    _CLEANUP(context)
+    return S_PHOTO
 
 
-async def confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Discard invoice."""
-    query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text("❌ Factura cancelada. Usa *Nueva factura* para empezar de nuevo.",
-                                  parse_mode="Markdown")
-
-    for key in ("pending_invoice", "location", "category", "edit_field",
-                "pending_photo_id", "mes_elegido", "tipo_gasto", "batch_mode"):
-        context.user_data.pop(key, None)
-    return ConversationHandler.END
-
-
-async def batch_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """El usuario termina el lote de facturas."""
-    query = update.callback_query
-    await query.answer()
-
-    mes = context.user_data.get("mes_activo", current_mes())
-    facturas = get_facturas(mes)
-    total = sum(f["total"] for f in facturas)
-
-    await query.edit_message_text(
-        f"✅ *Lote terminado*\n\n"
-        f"📊 *{mes}* — {len(facturas)} facturas  •  RD$ {total:,.2f}\n\n"
-        f"Usa *Resumen* o *Descargar Excel* para ver los datos.",
-        parse_mode="Markdown",
-    )
-    for key in ("pending_invoice", "location", "category", "edit_field",
-                "pending_photo_id", "mes_elegido", "tipo_gasto", "batch_mode"):
-        context.user_data.pop(key, None)
-    return ConversationHandler.END
-
-
-async def batch_next(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Callback 'Siguiente factura' en modo lote — simplemente confirmar y esperar foto."""
+async def otra_factura(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Callback 'Subir otra' → quedarse en S_PHOTO esperando la siguiente foto."""
     query = update.callback_query
     await query.answer("📸 Envía la siguiente foto")
     await query.edit_message_text(
-        query.message.text.split("\n\n📸")[0] + "\n\n📸 Listo, envía la siguiente factura.",
+        query.message.text + "\n\n📸 Listo, envía la siguiente factura.",
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )
     return S_PHOTO
 
 
-async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Show field selection for editing."""
+async def fin_lote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Callback 'Terminar' → cerrar conversación."""
     query = update.callback_query
     await query.answer()
+    await query.edit_message_text(
+        query.message.text + "\n\n_Usa Resumen o Descargar Excel para ver los datos._",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+    return ConversationHandler.END
 
+
+async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Mostrar selector de campos para editar."""
+    query = update.callback_query
+    await query.answer()
     await query.edit_message_text(
         "✏️ *¿Qué campo deseas corregir?*\n\nSelecciona el campo:",
         reply_markup=edit_keyboard(),
@@ -1081,26 +955,30 @@ async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """A field was selected → ask for new value."""
+    """Campo seleccionado → pedir nuevo valor (o mostrar selector si es tipo_gasto)."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "edit_back":
-        # Go back to review without changes
-        data     = context.user_data.get("pending_invoice", {})
-        location = context.user_data.get("location", "—")
-        category = context.user_data.get("category", "—")
-        msg      = format_review_message(data, location, category, resolve_mes(context, data))
-        await query.edit_message_text(msg, reply_markup=confirm_keyboard(), parse_mode="Markdown")
+        msg, kb = _review_msg_and_kb(context)
+        await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
         return S_CONFIRM
 
     field = query.data.replace("edit_", "")
     context.user_data["edit_field"] = field
 
+    if field == "tipo_gasto":
+        current_tg = context.user_data.get("tipo_gasto", "02")
+        await query.edit_message_text(
+            "🏷️ *Selecciona el tipo de gasto DGII:*",
+            reply_markup=tipo_gasto_edit_keyboard(current_tg),
+            parse_mode="Markdown",
+        )
+        return S_EDIT_SELECT
+
     data  = context.user_data.get("pending_invoice", {})
     label = EDITABLE_FIELDS.get(field, field)
 
-    # Show current value
     current_values = {
         "total":   f"RD$ {float(data.get('total_facturado',0)):,.2f}",
         "itbis":   f"RD$ {float(data.get('itbis',0)):,.2f}",
@@ -1129,17 +1007,26 @@ async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
     return S_EDIT_VALUE
 
 
+async def edit_tipo_gasto_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Tipo de gasto elegido desde la edición → volver a revisión."""
+    query = update.callback_query
+    await query.answer()
+    val = query.data.replace("edittg_", "")
+    if val != "back":
+        context.user_data["tipo_gasto"] = val
+    msg, kb = _review_msg_and_kb(context)
+    await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
+    return S_CONFIRM
+
+
 async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Apply the new value and return to review."""
+    """Aplica el nuevo valor y vuelve a la revisión."""
     if not is_allowed(update): return ConversationHandler.END
 
     field    = context.user_data.get("edit_field")
     new_val  = update.message.text.strip()
     data     = context.user_data.get("pending_invoice", {})
-    location = context.user_data.get("location", "—")
-    category = context.user_data.get("category", "—")
 
-    # Apply value to the right key
     try:
         if field == "total":
             data["total_facturado"] = float(new_val.replace(",", ".").replace("RD$", "").strip())
@@ -1168,13 +1055,11 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return S_EDIT_VALUE
 
-    # Re-validate math after numeric changes
     if field in ("total", "itbis", "base", "propina"):
         total   = float(data.get("total_facturado") or 0)
         itbis   = float(data.get("itbis") or 0)
         propina = float(data.get("propina") or 0)
         base    = float(data.get("monto_sin_itbis") or 0)
-        # Recalculate base if total or itbis changed
         if field in ("total", "itbis"):
             base = round(total - itbis - propina, 2)
             data["monto_sin_itbis"] = base
@@ -1182,7 +1067,6 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         calc = round(base + itbis + propina, 2)
         if abs(calc - total) > 1.0:
             warns.append(f"⚠ Descuadre: {base:.2f}+{itbis:.2f}+{propina:.2f}={calc:.2f} ≠ {total:.2f}")
-        # Keep existing non-math warnings
         existing = [w for w in (data.get("_warnings") or []) if "Descuadre" not in w]
         data["_warnings"] = existing + warns
         data["_needs_review"] = len(data["_warnings"]) > 0
@@ -1190,17 +1074,26 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["pending_invoice"] = data
     context.user_data.pop("edit_field", None)
 
-    # Back to review
-    msg = format_review_message(data, location, category, resolve_mes(context, data))
-    await update.message.reply_text(msg, reply_markup=confirm_keyboard(), parse_mode="Markdown")
+    msg, kb = _review_msg_and_kb(context)
+    await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
     return S_CONFIRM
 
 
+async def confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancelar la factura actual."""
+    query = update.callback_query
+    await query.answer()
+    _CLEANUP(context)
+    await query.edit_message_text(
+        "❌ Factura cancelada. Usa *Nueva factura* para empezar de nuevo.",
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
+
+
 async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel the entire conversation."""
-    for key in ("pending_invoice", "location", "category", "edit_field",
-                "pending_photo_id", "mes_elegido", "tipo_gasto", "batch_mode"):
-        context.user_data.pop(key, None)
+    """Cancelar toda la conversación (/cancelar)."""
+    _CLEANUP(context)
     if update.message:
         await update.message.reply_text("Operación cancelada. Usa /nueva para empezar.")
     return ConversationHandler.END
@@ -1694,38 +1587,28 @@ def main():
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
         ],
         states={
-            # 1) Mes  →  2) ¿una o varias?  →  3) foto(s)  →
-            # 4) ubicación (por foto)  →  5) categoría  →  6) tipo gasto  →  7) confirmar
-            S_MONTH: [
-                CallbackQueryHandler(got_month, pattern="^mes_"),
-            ],
-            S_BATCH_MODE: [
-                CallbackQueryHandler(got_batch_mode, pattern="^batch_(single|multi)$"),
-                CallbackQueryHandler(back_to_month, pattern="^back_to_month$"),
-            ],
             S_PHOTO: [
                 MessageHandler(filters.PHOTO, got_photo),
-                CallbackQueryHandler(batch_end,  pattern="^batch_done$"),
-                CallbackQueryHandler(batch_next, pattern="^batch_next$"),
+                CallbackQueryHandler(otra_factura, pattern="^otra_factura$"),
+                CallbackQueryHandler(fin_lote,     pattern="^fin_lote$"),
             ],
             S_LOCATION: [
                 CallbackQueryHandler(got_location, pattern="^loc_"),
             ],
             S_CATEGORY: [
-                CallbackQueryHandler(got_category, pattern="^cat_"),
+                CallbackQueryHandler(got_category,     pattern="^cat_"),
                 CallbackQueryHandler(back_to_location, pattern="^back_to_location$"),
             ],
-            S_TIPO_GASTO: [
-                CallbackQueryHandler(got_tipo_gasto, pattern="^tg_"),
-                CallbackQueryHandler(back_to_category, pattern="^back_to_category$"),
-            ],
             S_CONFIRM: [
-                CallbackQueryHandler(confirm_accept, pattern="^confirm_accept$"),
-                CallbackQueryHandler(confirm_edit,   pattern="^confirm_edit$"),
-                CallbackQueryHandler(confirm_cancel, pattern="^confirm_cancel$"),
+                CallbackQueryHandler(confirm_accept,        pattern="^confirm_accept$"),
+                CallbackQueryHandler(confirm_edit,          pattern="^confirm_edit$"),
+                CallbackQueryHandler(confirm_cancel,        pattern="^confirm_cancel$"),
+                CallbackQueryHandler(on_confirm_change_mes, pattern="^confirm_change_mes$"),
+                CallbackQueryHandler(on_cmes_picked,        pattern="^cmes_"),
             ],
             S_EDIT_SELECT: [
-                CallbackQueryHandler(edit_field_selected, pattern="^edit_"),
+                CallbackQueryHandler(edit_field_selected,  pattern="^edit_"),
+                CallbackQueryHandler(edit_tipo_gasto_pick, pattern="^edittg_"),
             ],
             S_EDIT_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value_received),
@@ -1735,7 +1618,7 @@ def main():
             CommandHandler("cancelar", conv_cancel),
             MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
         ],
-        allow_reentry=True,  # BTN_NUEVA siempre reinicia desde cualquier estado
+        allow_reentry=True,
         per_user=True,
         per_chat=True,
     )
