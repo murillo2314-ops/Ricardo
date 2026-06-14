@@ -83,6 +83,10 @@ ALLOWED_USERS = set(
 # en Railway; por defecto es la acordada con el cliente.
 BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
 
+# RNC propio (el receptor/comprador). Se excluye del campo "rnc" que siempre
+# debe ser el del EMISOR de la factura.
+CONSUMER_RNC = os.environ.get("CONSUMER_RNC", "131545157")
+
 # Conversation states
 (
     S_MONTH,
@@ -288,7 +292,18 @@ def delete_last(mes: str) -> dict | None:
 # EXTRACCIÓN (QR + Claude Vision)
 # ──────────────────────────────────────────────────────────────
 
-EXTRACTION_PROMPT = """Eres un experto en facturación dominicana y fiscalización DGII.
+def _build_extraction_prompt() -> str:
+    consumer_line = (
+        f"\n⚠️ RNC DEL COMPRADOR (RECEPTOR) A IGNORAR: {CONSUMER_RNC}\n"
+        f"   Este RNC aparece en la factura como receptor/consumidor — NUNCA lo uses como 'rnc'.\n"
+        f"   El campo 'rnc' es SIEMPRE el RNC del EMISOR (quien emite la factura, el proveedor)."
+        if CONSUMER_RNC else ""
+    )
+    return f"""Eres un experto en facturación dominicana y fiscalización DGII.
+
+━━━ REGLA DE ORO SOBRE RNC ━━━
+'rnc' = RNC del EMISOR (el negocio que emite y firma el comprobante fiscal).
+NUNCA uses el RNC del receptor/comprador.{consumer_line}
 
 ━━━ REGLA DE ORO SOBRE MONTOS ━━━
 "total_facturado" = importe FINAL pagado (el número más grande al fondo del ticket).
@@ -318,10 +333,12 @@ TIPO: B01/E31=CREDITO_FISCAL | B02/E32=CONSUMIDOR_FINAL | B14/E34=REGIMEN_ESPECI
 nivel_confianza: ALTO|MEDIO|BAJO
 
 Responde SOLO con JSON válido, sin markdown:
-{"rnc":"","ncf":"","fecha_comprobante":"YYYY-MM-DD","fecha_pago":"YYYY-MM-DD",
+{{"rnc":"","ncf":"","fecha_comprobante":"YYYY-MM-DD","fecha_pago":"YYYY-MM-DD",
 "total_facturado":0,"itbis":0,"monto_sin_itbis":0,"propina":0,
 "metodo_pago":"","nombre_proveedor":"","tipo_comprobante":"","observaciones":null,
-"nivel_confianza":"ALTO"}"""
+"nivel_confianza":"ALTO"}}"""
+
+EXTRACTION_PROMPT: str = ""  # populated in main() after CONSUMER_RNC is set
 
 
 def decode_qr(image_bytes: bytes) -> str | None:
@@ -450,7 +467,7 @@ async def extract_invoice(image_bytes: bytes, filename: str) -> dict:
         resp = await client.messages.create(
             model="claude-opus-4-8",
             max_tokens=1024,
-            system=[{"type": "text", "text": EXTRACTION_PROMPT,
+            system=[{"type": "text", "text": _build_extraction_prompt(),
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {
@@ -712,10 +729,10 @@ async def got_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     etiqueta = "✨ Automático (por fecha de la factura)" if choice == "AUTO" \
         else f"📅 {mes_label(choice)}"
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}")
-        for loc in LOCATIONS
-    ]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS],
+        [InlineKeyboardButton("← Cambiar mes", callback_data="back_to_month")],
+    ])
     await query.edit_message_text(
         f"{etiqueta}\n\n¿Dónde fue la compra?",
         reply_markup=keyboard,
@@ -732,10 +749,10 @@ async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     location = query.data.replace("loc_", "")
     context.user_data["location"] = location
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}")
-        for cat in CATEGORIES
-    ]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}") for cat in CATEGORIES],
+        [InlineKeyboardButton("← Cambiar ubicación", callback_data="back_to_location")],
+    ])
     await query.edit_message_text(
         f"📍 *{location}*\n\n¿Para qué es la compra?",
         reply_markup=keyboard,
@@ -753,10 +770,13 @@ async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["category"] = category
     location = context.user_data.get("location", "—")
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("1️⃣ Una factura",    callback_data="batch_single"),
-        InlineKeyboardButton("📚 Varias facturas", callback_data="batch_multi"),
-    ]])
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("1️⃣ Una factura",    callback_data="batch_single"),
+            InlineKeyboardButton("📚 Varias facturas", callback_data="batch_multi"),
+        ],
+        [InlineKeyboardButton("← Cambiar categoría", callback_data="back_to_category")],
+    ])
     await query.edit_message_text(
         f"📍 *{location}*  •  🏷️ *{category}*\n\n"
         f"¿Cuántas facturas vas a subir?",
@@ -791,6 +811,53 @@ async def got_batch_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         parse_mode="Markdown",
     )
     return S_PHOTO
+
+
+async def back_to_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← Volver al selector de mes."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📅 ¿A qué mes (Excel) quieres agregar la factura?",
+        reply_markup=month_keyboard(),
+    )
+    return S_MONTH
+
+
+async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← Volver al selector de ubicación."""
+    query = update.callback_query
+    await query.answer()
+    mes_elegido = context.user_data.get("mes_elegido")
+    etiq = "✨ Automático" if mes_elegido == "AUTO" \
+        else (f"📅 {mes_label(mes_elegido)}" if mes_elegido else "📅 ...")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS],
+        [InlineKeyboardButton("← Cambiar mes", callback_data="back_to_month")],
+    ])
+    await query.edit_message_text(
+        f"{etiq}\n\n¿Dónde fue la compra?",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return S_LOCATION
+
+
+async def back_to_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← Volver al selector de categoría."""
+    query = update.callback_query
+    await query.answer()
+    location = context.user_data.get("location", "—")
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🏷️ {cat}", callback_data=f"cat_{cat}") for cat in CATEGORIES],
+        [InlineKeyboardButton("← Cambiar ubicación", callback_data="back_to_location")],
+    ])
+    await query.edit_message_text(
+        f"📍 *{location}*\n\n¿Para qué es la compra?",
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+    )
+    return S_CATEGORY
 
 
 async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
@@ -1620,6 +1687,12 @@ def main():
     app.add_handler(TypeHandler(Update, auth_gate), group=-1)
 
     # Conversation handler for the guided capture flow
+    _back_handlers = [
+        CallbackQueryHandler(back_to_month,    pattern="^back_to_month$"),
+        CallbackQueryHandler(back_to_location, pattern="^back_to_location$"),
+        CallbackQueryHandler(back_to_category, pattern="^back_to_category$"),
+    ]
+
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("nueva", start_flow),
@@ -1632,12 +1705,15 @@ def main():
             ],
             S_LOCATION: [
                 CallbackQueryHandler(got_location, pattern="^loc_"),
+                *_back_handlers,
             ],
             S_CATEGORY: [
                 CallbackQueryHandler(got_category, pattern="^cat_"),
+                *_back_handlers,
             ],
             S_BATCH_MODE: [
                 CallbackQueryHandler(got_batch_mode, pattern="^batch_(single|multi)$"),
+                *_back_handlers,
             ],
             S_PHOTO: [
                 MessageHandler(filters.PHOTO, got_photo),
@@ -1659,7 +1735,11 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value_received),
             ],
         },
-        fallbacks=[CommandHandler("cancelar", conv_cancel)],
+        fallbacks=[
+            CommandHandler("cancelar", conv_cancel),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
+        ],
+        allow_reentry=True,  # BTN_NUEVA siempre reinicia desde cualquier estado
         per_user=True,
         per_chat=True,
     )
