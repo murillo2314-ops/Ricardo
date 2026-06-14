@@ -604,6 +604,7 @@ def tipo_gasto_keyboard(suggested: str = "") -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(
             f"{star}{code} – {label}", callback_data=f"tg_{code}"
         )])
+    rows.append([InlineKeyboardButton("← Cambiar categoría", callback_data="back_to_category")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -719,7 +720,7 @@ async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def got_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibido el mes elegido → preguntar ubicación."""
+    """Recibido el mes elegido → preguntar cuántas facturas se van a subir."""
     query = update.callback_query
     await query.answer()
 
@@ -730,15 +731,18 @@ async def got_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         else f"📅 {mes_label(choice)}"
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS],
+        [
+            InlineKeyboardButton("1️⃣ Una factura",    callback_data="batch_single"),
+            InlineKeyboardButton("📚 Varias facturas", callback_data="batch_multi"),
+        ],
         [InlineKeyboardButton("← Cambiar mes", callback_data="back_to_month")],
     ])
     await query.edit_message_text(
-        f"{etiqueta}\n\n¿Dónde fue la compra?",
+        f"{etiqueta}\n\n¿Cuántas facturas vas a subir?",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
-    return S_LOCATION
+    return S_BATCH_MODE
 
 
 async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -762,54 +766,45 @@ async def got_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Received category → ask single or batch upload."""
+    """Received category → show review + ask tipo de gasto."""
     query = update.callback_query
     await query.answer()
 
     category = query.data.replace("cat_", "")
     context.user_data["category"] = category
     location = context.user_data.get("location", "—")
+    data     = context.user_data.get("pending_invoice", {})
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("1️⃣ Una factura",    callback_data="batch_single"),
-            InlineKeyboardButton("📚 Varias facturas", callback_data="batch_multi"),
-        ],
-        [InlineKeyboardButton("← Cambiar categoría", callback_data="back_to_category")],
-    ])
+    suggested = suggest_tipo_gasto(data)
+    msg = format_review_message(data, location, category, resolve_mes(context, data))
+    tg_sugg = TIPO_GASTO_DICT.get(suggested, "")
+    msg += f"\n\n🏷️ *¿Cuál es el tipo de gasto?*\n💡 Sugerencia: *{suggested}* — {tg_sugg}"
     await query.edit_message_text(
-        f"📍 *{location}*  •  🏷️ *{category}*\n\n"
-        f"¿Cuántas facturas vas a subir?",
-        reply_markup=keyboard,
+        msg,
+        reply_markup=tipo_gasto_keyboard(suggested),
         parse_mode="Markdown",
     )
-    return S_BATCH_MODE
+    return S_TIPO_GASTO
 
 
 async def got_batch_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Batch mode selected → start capturing photos."""
+    """Modo elegido → pedir la(s) foto(s). La ubicación/categoría se preguntan
+    DESPUÉS de cada foto, para clasificar factura por factura."""
     query = update.callback_query
     await query.answer()
 
     mode = query.data.replace("batch_", "")  # "single" or "multi"
     context.user_data["batch_mode"] = (mode == "multi")
-    location = context.user_data.get("location", "—")
-    category = context.user_data.get("category", "—")
 
-    # Si hay foto pendiente (entraron enviando foto directamente), procesarla ya.
+    # Si hay foto pendiente (entró enviando foto directamente), procesarla ya.
     pending_id = context.user_data.pop("pending_photo_id", None)
     if pending_id:
-        await query.edit_message_text(
-            f"📍 *{location}*  •  🏷️ *{category}*", parse_mode="Markdown"
-        )
         return await _extract_and_review(query.message, context, pending_id)
 
-    hint = "Envía las fotos de las facturas una a una." if mode == "multi" \
+    hint = ("Envía las fotos de las facturas (una por una). Después de cada una "
+            "te pregunto dónde fue la compra.") if mode == "multi" \
         else "Envía la foto de la factura."
-    await query.edit_message_text(
-        f"📍 *{location}*  •  🏷️ *{category}*\n\n📸 {hint}",
-        parse_mode="Markdown",
-    )
+    await query.edit_message_text(f"📸 {hint}")
     return S_PHOTO
 
 
@@ -825,18 +820,17 @@ async def back_to_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← Volver al selector de ubicación."""
+    """← Volver a la pregunta de ubicación (después de la foto)."""
     query = update.callback_query
     await query.answer()
-    mes_elegido = context.user_data.get("mes_elegido")
-    etiq = "✨ Automático" if mes_elegido == "AUTO" \
-        else (f"📅 {mes_label(mes_elegido)}" if mes_elegido else "📅 ...")
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS],
-        [InlineKeyboardButton("← Cambiar mes", callback_data="back_to_month")],
-    ])
+    data   = context.user_data.get("pending_invoice", {})
+    nombre = data.get("nombre_proveedor") or "Factura leída"
+    total  = float(data.get("total_facturado") or 0)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
+    ]])
     await query.edit_message_text(
-        f"{etiq}\n\n¿Dónde fue la compra?",
+        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -844,7 +838,7 @@ async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def back_to_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← Volver al selector de categoría."""
+    """← Volver a la pregunta de categoría."""
     query = update.callback_query
     await query.answer()
     location = context.user_data.get("location", "—")
@@ -862,10 +856,7 @@ async def back_to_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
                               file_id: str) -> int:
-    """Download photo by file_id, extract data, check duplicates, ask tipo de gasto."""
-    location = context.user_data.get("location", "—")
-    category = context.user_data.get("category", "—")
-
+    """Descarga la foto, extrae datos, verifica duplicados y pregunta la ubicación."""
     processing_msg = await reply_to.reply_text("⏳ Analizando factura con IA...")
 
     file = await context.bot.get_file(file_id)
@@ -903,21 +894,28 @@ async def _extract_and_review(reply_to, context: ContextTypes.DEFAULT_TYPE,
 
     context.user_data["pending_invoice"] = data
 
-    # Mostrar resumen + pedir tipo de gasto
-    suggested = suggest_tipo_gasto(data)
-    msg = format_review_message(data, location, category, resolve_mes(context, data))
-    tg_sugg = TIPO_GASTO_DICT.get(suggested, "")
-    msg += f"\n\n🏷️ *¿Cuál es el tipo de gasto?*\n💡 Sugerencia: *{suggested}* — {tg_sugg}"
+    # Leída la factura → ahora sí preguntar dónde fue la compra.
+    return await _ask_location(reply_to, context)
+
+
+async def _ask_location(reply_to, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Pregunta la ubicación de la factura recién leída (paso posterior a la foto)."""
+    data   = context.user_data.get("pending_invoice", {})
+    nombre = data.get("nombre_proveedor") or "Factura leída"
+    total  = float(data.get("total_facturado") or 0)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
+    ]])
     await reply_to.reply_text(
-        msg,
-        reply_markup=tipo_gasto_keyboard(suggested),
+        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
+        reply_markup=keyboard,
         parse_mode="Markdown",
     )
-    return S_TIPO_GASTO
+    return S_LOCATION
 
 
 async def got_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Received photo in S_PHOTO state → extract → show tipo de gasto."""
+    """Received photo in S_PHOTO state → extract → ask location."""
     if not is_allowed(update): return ConversationHandler.END
     return await _extract_and_review(
         update.message, context, update.message.photo[-1].file_id
@@ -1004,8 +1002,10 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
-        # Limpiar solo los datos de la factura actual; mantener location/category/batch
-        for key in ("pending_invoice", "edit_field", "pending_photo_id", "mes_elegido", "tipo_gasto"):
+        # Limpiar los datos de ESTA factura; mantener mes_elegido y batch_mode
+        # para que el lote siga yendo al mismo Excel y pidiendo foto por foto.
+        for key in ("pending_invoice", "location", "category", "edit_field",
+                    "pending_photo_id", "tipo_gasto"):
             context.user_data.pop(key, None)
         return S_PHOTO
 
@@ -1687,12 +1687,6 @@ def main():
     app.add_handler(TypeHandler(Update, auth_gate), group=-1)
 
     # Conversation handler for the guided capture flow
-    _back_handlers = [
-        CallbackQueryHandler(back_to_month,    pattern="^back_to_month$"),
-        CallbackQueryHandler(back_to_location, pattern="^back_to_location$"),
-        CallbackQueryHandler(back_to_category, pattern="^back_to_category$"),
-    ]
-
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("nueva", start_flow),
@@ -1700,28 +1694,30 @@ def main():
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
         ],
         states={
+            # 1) Mes  →  2) ¿una o varias?  →  3) foto(s)  →
+            # 4) ubicación (por foto)  →  5) categoría  →  6) tipo gasto  →  7) confirmar
             S_MONTH: [
                 CallbackQueryHandler(got_month, pattern="^mes_"),
             ],
-            S_LOCATION: [
-                CallbackQueryHandler(got_location, pattern="^loc_"),
-                *_back_handlers,
-            ],
-            S_CATEGORY: [
-                CallbackQueryHandler(got_category, pattern="^cat_"),
-                *_back_handlers,
-            ],
             S_BATCH_MODE: [
                 CallbackQueryHandler(got_batch_mode, pattern="^batch_(single|multi)$"),
-                *_back_handlers,
+                CallbackQueryHandler(back_to_month, pattern="^back_to_month$"),
             ],
             S_PHOTO: [
                 MessageHandler(filters.PHOTO, got_photo),
                 CallbackQueryHandler(batch_end,  pattern="^batch_done$"),
                 CallbackQueryHandler(batch_next, pattern="^batch_next$"),
             ],
+            S_LOCATION: [
+                CallbackQueryHandler(got_location, pattern="^loc_"),
+            ],
+            S_CATEGORY: [
+                CallbackQueryHandler(got_category, pattern="^cat_"),
+                CallbackQueryHandler(back_to_location, pattern="^back_to_location$"),
+            ],
             S_TIPO_GASTO: [
                 CallbackQueryHandler(got_tipo_gasto, pattern="^tg_"),
+                CallbackQueryHandler(back_to_category, pattern="^back_to_category$"),
             ],
             S_CONFIRM: [
                 CallbackQueryHandler(confirm_accept, pattern="^confirm_accept$"),
