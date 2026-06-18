@@ -25,11 +25,10 @@ diferencia del generador "por vibe", que solo aproxima el estilo).
 ### 2. Exporta tus credenciales
 ```bash
 export SPOTIPY_CLIENT_ID=tu_client_id
-export SPOTIPY_CLIENT_SECRET=tu_client_secret
 export SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
 ```
-> No subas estas credenciales al repo. El token queda en `.cache` (ya está en
-> `.gitignore`).
+> Usa **PKCE**, así que **no necesitas el Client Secret**. El token queda en
+> `.cache` (ya está en `.gitignore`); no subas nada de eso al repo.
 
 ### 3. Instala dependencias
 ```bash

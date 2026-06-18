@@ -28,7 +28,7 @@ from pathlib import Path
 
 try:
     import spotipy
-    from spotipy.oauth2 import SpotifyOAuth
+    from spotipy.oauth2 import SpotifyPKCE
 except ImportError:
     sys.exit("Falta spotipy. Corre:  pip install -r requirements.txt")
 
@@ -143,8 +143,9 @@ def main() -> None:
     tracks = read_tracklist()
     print(f"Tracklist: {len(tracks)} canciones leidas de {TRACKLIST_FILE.name}\n")
 
-    # Autenticacion (abre el navegador la primera vez para autorizar)
-    auth = SpotifyOAuth(scope=SCOPE, cache_path=str(HERE / ".cache"), open_browser=True)
+    # Autenticacion PKCE (NO requiere client secret; abre el navegador la
+    # primera vez y captura el callback en 127.0.0.1:8888 automaticamente).
+    auth = SpotifyPKCE(scope=SCOPE, cache_path=str(HERE / ".cache"), open_browser=True)
     sp = spotipy.Spotify(auth_manager=auth)
 
     uris: list[str] = []
