@@ -1,0 +1,5 @@
+# Token cache de spotipy — NUNCA subir (da acceso a tu cuenta)
+.cache
+.cache-*
+# Credenciales locales
+.env

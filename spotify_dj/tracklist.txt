@@ -1,0 +1,44 @@
+# TRIPPY TRIP — DJ set techno/hard techno 120-140 BPM
+# Formato:  Titulo | Artista     (las lineas con # se ignoran)
+# Edita libremente: agrega, quita o reordena. El orden aqui = orden en la playlist.
+
+# --- WARM-UP (122-125 BPM) ---
+Ghost In My Bed | ZHU
+San Frandisco | Dom Dolla
+Double Dutch | Walker & Royce, Kyle Watson
+Blackberries | FISHER
+HOTS 4 U | Chris Lorenzo
+
+# --- BUILD (125-129 BPM) ---
+Gimme That Bounce | Mau P
+Dress Code | Mau P
+Give It To Me | Kormak
+On The Ground | oskar med k
+Hooked | Martin Ikin
+It's That Time (FISHER Remix) | Marlon Hoffstadt, FISHER
+
+# --- PRIMER PEAK (129-133 BPM) ---
+Boost Up | FISHER, Flowdan
+MERTHER | Mau P
+Raw (Tony Romera Remix) | Julio Navas, Gustavo Bravetti
+BASS GLIDE | AYYBO
+Hysteria | SERGEIV
+Pressure | GENESI, Laherte
+
+# --- VARIACION (127-130 BPM) — el respiro oscuro ---
+Contortion | Sextile
+No Fun | Sextile
+
+# --- HARD PEAK / RAVE (132-140 BPM) ---
+Medicine | PONGAN TECHNO HDSPM
+Daydream | I Hate Models
+Because They Want Our Seat | Sara Landry, Nico Moreno
+GIRLBOSS | Sara Landry
+Vendetta | Indira Paganotto
+Gipsy Queen | Indira Paganotto
+Werewolf Disco Club | I Hate Models
+Suck Me Dry, Like a Vampire | Toxic Machinery
+
+# --- CIERRE (128-126 BPM) ---
+Forever Melancholia | I Hate Models
+Kids | Sextile, Izzy Glaudini
