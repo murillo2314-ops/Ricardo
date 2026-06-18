@@ -3,3 +3,6 @@
 .cache-*
 # Credenciales locales
 .env
+# Cache de Python
+__pycache__/
+*.pyc
