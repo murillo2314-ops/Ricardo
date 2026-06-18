@@ -6,3 +6,5 @@
 # Cache de Python
 __pycache__/
 *.pyc
+# PKCE code_verifier temporal del flujo de auth
+.verifier
