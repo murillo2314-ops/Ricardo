@@ -88,6 +88,20 @@ Traduce TODA la arquitectura a UN solo prompt rico para `create_playlist` (una s
 
 **Restricción honesta que debes conocer:** `create_playlist` genera la playlist desde tu descripción — el backend de Spotify elige y ordena los tracks finales, no puedes forzar un tracklist exacto track-por-track. Por eso el prompt tiene que ser MUY descriptivo: mientras mejor codifiques la curva, los géneros por fase y los artistas ancla, más fiel sale el set. No le prometas al usuario un orden track-por-track garantizado; prométele la arquitectura y la vibe, que es lo que sí controlas.
 
+**LÍMITE DURO (aprendido a la mala) — léelo antes de prometer nada:**
+
+- `create_playlist` **NO inserta canciones específicas.** Aunque escribas "incluye *Boost Up* de FISHER", el backend genera música *en ese estilo* y suele NO incluir el track exacto. Un prompt que es solo una lista de tracks ("crea con exactamente estos temas: 1)... 2)...") falla con `NO_CONTENT` — la herramienta necesita una descripción de vibe, no un tracklist.
+- **NO existe ninguna herramienta para añadir/quitar/reordenar tracks** en una playlist ya creada. El único conector es `create_playlist`, que siempre genera una playlist NUEVA desde cero.
+- Por lo tanto: **regenerar NO es "agregar".** Si el usuario pide "añade estas canciones a la playlist de antes", regenerar le DESTRUYE el set bueno y crea duplicados. NUNCA regeneres en silencio haciéndolo pasar por "agregar".
+
+**Regla de oro cuando el usuario quiere canciones EXACTAS (must-haves):**
+
+1. **Avísale del límite de una, en la primera petición de "agregar"** — no después de 5 regeneraciones. Di claro: "el conector no inserta tracks concretos ni edita playlists existentes; solo genera por vibe".
+2. **El deliverable de verdad es el TRACKLIST en texto** — numerado, ordenado por fase, con BPM/key, marcando los must-haves. Eso lo controlas al 100% y queda exacto. Verifica cada track con `Spotify:search` para que exista y dale el nombre + artista listos para buscar.
+3. El usuario añade los must-haves a mano (búsqueda → ⋯ → Añadir a playlist; ~10 s cada uno). Es lo más rápido y fiable, y conserva su set bueno intacto.
+4. La playlist generada por `create_playlist` es un **acompañamiento por vibe**, no la fuente de verdad. Preséntala así, nunca como "aquí están tus 15 canciones".
+5. **Una sola generación.** No regeneres en bucle intentando forzar tracks; no va a funcionar y solo acumula duplicados y frustración.
+
 ### 5. Presenta el set como DJ
 
 Muéstrale al usuario la playlist creada Y la arquitectura del set en lenguaje de DJ (ver formato abajo). Que vea el pensamiento, no solo el link.
