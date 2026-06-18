@@ -62,6 +62,7 @@ URI_HINTS_BY_TITLE = {
     "forever melancholia": "spotify:track:6ZWYsvOTYigBYoHMpFOyoA",
     "werewolf disco club": "spotify:track:6iUHeJeetiHa2olRVvtNXE",
     "because they want our seat": "spotify:track:4zr7hfFkbtPBUc9c1CeJN6",
+    "havana bounce": "spotify:track:3yDlsbUiSWvViojyF0244u",
     "girlboss": "spotify:track:04WxwL4ZRewLveO2qjej54",
     "vendetta": "spotify:track:5Y1SndahLemyQ1M9ydCf6N",
     "gipsy queen": "spotify:track:645khgMxKxkXqUEs4UrBB6",
