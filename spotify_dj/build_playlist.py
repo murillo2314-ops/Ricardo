@@ -61,7 +61,14 @@ URI_HINTS_BY_TITLE = {
     "girlboss": "spotify:track:04WxwL4ZRewLveO2qjej54",
     "vendetta": "spotify:track:5Y1SndahLemyQ1M9ydCf6N",
     "gipsy queen": "spotify:track:645khgMxKxkXqUEs4UrBB6",
+    "legend": "spotify:track:2voOlJ0QcTDTDRexSw6bGe",
+    "blackbird sr 71": "spotify:track:4WQ9j1TwdxeMl7OXFKLbws",
+    "hands up": "spotify:track:4U4XNkHA99dkqFbOxc8OjL",
     "suck me dry, like a vampire": "spotify:track:1JfwTZbIDXlKUFYbAU3lZx",
+    "take it": "spotify:track:14fIlfcmFPlj4V2IazeJ25",
+    "rhyme dust": "spotify:track:59QDyqLww2pxyg9ijOPO7f",
+    "saving up": "spotify:track:787Y2idwCU2Rk60Prv4wpr",
+    "girl": "spotify:track:46N3FCKFABRjNoNBVq4osr",
 }
 
 

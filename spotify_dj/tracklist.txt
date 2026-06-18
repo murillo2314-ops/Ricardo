@@ -1,44 +1,71 @@
-# TRIPPY TRIP — DJ set techno/hard techno 120-140 BPM
+# TRIPPY TRIP — DJ set techno/hard techno 120-140 BPM  (55 canciones, ~4.5h)
 # Formato:  Titulo | Artista     (las lineas con # se ignoran)
 # Edita libremente: agrega, quita o reordena. El orden aqui = orden en la playlist.
+# Las INDISPENSABLES van marcadas con (*) en el comentario.
 
-# --- WARM-UP (122-125 BPM) ---
+# ===== WARM-UP (122-125 BPM) — entras suave, groovy/hipnotico =====
 Ghost In My Bed | ZHU
 San Frandisco | Dom Dolla
+Take It | Dom Dolla
 Double Dutch | Walker & Royce, Kyle Watson
 Blackberries | FISHER
+You Little Beauty | FISHER
 HOTS 4 U | Chris Lorenzo
+Rhyme Dust | MK, Dom Dolla
+Saving Up | Dom Dolla
 
-# --- BUILD (125-129 BPM) ---
+# ===== BUILD (125-129 BPM) — rodante, driving, te engancha =====
 Gimme That Bounce | Mau P
 Dress Code | Mau P
+Drugs From Amsterdam | Mau P
+Your Mind Is Dirty | Mau P
 Give It To Me | Kormak
 On The Ground | oskar med k
 Hooked | Martin Ikin
 It's That Time (FISHER Remix) | Marlon Hoffstadt, FISHER
+Losing It | FISHER
+girl$ | Dom Dolla
+Where You Are | John Summit
+Beats For The Underground | Mau P
 
-# --- PRIMER PEAK (129-133 BPM) ---
+# ===== PRIMER PEAK (129-133 BPM) — euforia, manos arriba =====
 Boost Up | FISHER, Flowdan
 MERTHER | Mau P
 Raw (Tony Romera Remix) | Julio Navas, Gustavo Bravetti
 BASS GLIDE | AYYBO
 Hysteria | SERGEIV
 Pressure | GENESI, Laherte
+Stay | FISHER
+Doppler | Charlotte de Witte
+Sgadi Li Mi | Charlotte de Witte
+Higher | Amelie Lens
+In My Mind | Amelie Lens
+Heroine | Dimitri Vegas & Like Mike
 
-# --- VARIACION (127-130 BPM) — el respiro oscuro ---
+# ===== VARIACION (127-130 BPM) — el respiro oscuro EBM/acid/post-punk =====
 Contortion | Sextile
 No Fun | Sextile
+Disco | Sextile
+Modern Weekend | Sextile
+Overdrive | Charlotte de Witte
 
-# --- HARD PEAK / RAVE (132-140 BPM) ---
+# ===== HARD PEAK / RAVE (132-140 BPM) — lo mas duro y trippy =====
 Medicine | PONGAN TECHNO HDSPM
 Daydream | I Hate Models
 Because They Want Our Seat | Sara Landry, Nico Moreno
 GIRLBOSS | Sara Landry
+Hands Up | Sara Landry, Alt8
 Vendetta | Indira Paganotto
 Gipsy Queen | Indira Paganotto
+Legend | Indira Paganotto
+Blackbird Sr-71 | Indira Paganotto
 Werewolf Disco Club | I Hate Models
 Suck Me Dry, Like a Vampire | Toxic Machinery
+ЗАВОД | ZAPRAVKA
 
-# --- CIERRE (128-126 BPM) ---
+# ===== CIERRE (128-126 BPM) — bajada con intencion, aterrizaje =====
 Forever Melancholia | I Hate Models
+Warm Night Skin | I Hate Models
 Kids | Sextile, Izzy Glaudini
+Faded | ZHU
+In The Morning | ZHU
