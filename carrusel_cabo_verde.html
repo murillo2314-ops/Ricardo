@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cabo Verde — Gloria en el Mundial 2026</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #0a0a1a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+
+  .carousel-wrapper {
+    width: 100%;
+    max-width: 540px;
+    position: relative;
+  }
+
+  .carousel {
+    position: relative;
+    overflow: hidden;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    aspect-ratio: 1 / 1;
+  }
+
+  .slide {
+    display: none;
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0; left: 0;
+    padding: 48px 44px;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    animation: fadeIn 0.5s ease;
+  }
+
+  .slide.active { display: flex; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.97); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  /* ──── Slide themes ──── */
+  .s1 {
+    background: linear-gradient(145deg, #003893 0%, #001f6e 50%, #000d3b 100%);
+  }
+  .s2 {
+    background: linear-gradient(145deg, #cc0000 0%, #880000 50%, #300000 100%);
+  }
+  .s3 {
+    background: linear-gradient(145deg, #003893 0%, #1a5fa0 60%, #000d3b 100%);
+  }
+  .s4 {
+    background: linear-gradient(145deg, #1a1a1a 0%, #222 50%, #0d3060 100%);
+  }
+  .s5 {
+    background: linear-gradient(145deg, #cc8800 0%, #994400 50%, #1a0a00 100%);
+  }
+  .s6 {
+    background: linear-gradient(145deg, #003893 0%, #cc0000 50%, #003893 100%);
+  }
+
+  /* ──── Stars decoration ──── */
+  .stars-ring {
+    position: absolute;
+    right: -40px; top: 50%;
+    transform: translateY(-50%);
+    width: 200px; height: 200px;
+    opacity: 0.12;
+  }
+
+  .stars-ring svg { width: 100%; height: 100%; }
+
+  /* ──── Typography ──── */
+  .tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #f5c518;
+    margin-bottom: 14px;
+    opacity: 0.9;
+  }
+
+  .slide-num {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: rgba(255,255,255,0.4);
+    margin-bottom: 8px;
+  }
+
+  h1 {
+    font-size: 46px;
+    font-weight: 900;
+    line-height: 1.05;
+    color: #ffffff;
+    text-shadow: 0 3px 20px rgba(0,0,0,0.5);
+    margin-bottom: 10px;
+  }
+
+  h2 {
+    font-size: 32px;
+    font-weight: 900;
+    line-height: 1.15;
+    color: #ffffff;
+    text-shadow: 0 2px 15px rgba(0,0,0,0.5);
+    margin-bottom: 14px;
+  }
+
+  .subtitle {
+    font-size: 18px;
+    font-weight: 600;
+    color: #f5c518;
+    margin-bottom: 16px;
+  }
+
+  p {
+    font-size: 15px;
+    line-height: 1.65;
+    color: rgba(255,255,255,0.88);
+    max-width: 360px;
+  }
+
+  .big-stat {
+    font-size: 80px;
+    font-weight: 900;
+    color: #f5c518;
+    line-height: 1;
+    text-shadow: 0 0 40px rgba(245,197,24,0.4);
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.7);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .flag-emoji {
+    font-size: 54px;
+    margin-bottom: 16px;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,0.4));
+  }
+
+  .pill {
+    display: inline-block;
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 50px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    margin: 3px 3px 3px 0;
+    letter-spacing: 0.5px;
+  }
+
+  .pill.gold {
+    background: rgba(245,197,24,0.18);
+    border-color: #f5c518;
+    color: #f5c518;
+  }
+
+  .divider {
+    width: 48px;
+    height: 4px;
+    background: #f5c518;
+    border-radius: 4px;
+    margin: 16px 0;
+  }
+
+  .quote {
+    font-size: 20px;
+    font-style: italic;
+    font-weight: 600;
+    color: #ffffff;
+    line-height: 1.5;
+    border-left: 4px solid #f5c518;
+    padding-left: 16px;
+    margin: 16px 0;
+  }
+
+  .bottom-brand {
+    position: absolute;
+    bottom: 22px;
+    right: 28px;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.3);
+    letter-spacing: 1px;
+  }
+
+  /* ──── Navigation ──── */
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 24px;
+  }
+
+  .nav button {
+    background: rgba(255,255,255,0.1);
+    border: 2px solid rgba(255,255,255,0.25);
+    color: #fff;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .nav button:hover {
+    background: rgba(245,197,24,0.3);
+    border-color: #f5c518;
+  }
+
+  .dots {
+    display: flex;
+    gap: 8px;
+  }
+
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.25);
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+
+  .dot.active {
+    background: #f5c518;
+    transform: scale(1.3);
+  }
+
+  .slide-count {
+    font-size: 12px;
+    color: rgba(255,255,255,0.5);
+    font-weight: 600;
+    margin-top: 10px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="carousel-wrapper">
+  <div class="carousel">
+
+    <!-- SLIDE 1 — Portada -->
+    <div class="slide s1 active">
+      <div class="stars-ring">
+        <svg viewBox="0 0 200 200" fill="white">
+          <text x="100" y="50"  text-anchor="middle" font-size="22">★</text>
+          <text x="150" y="80"  text-anchor="middle" font-size="22">★</text>
+          <text x="165" y="130" text-anchor="middle" font-size="22">★</text>
+          <text x="130" y="170" text-anchor="middle" font-size="22">★</text>
+          <text x="80"  y="180" text-anchor="middle" font-size="22">★</text>
+          <text x="35"  y="160" text-anchor="middle" font-size="22">★</text>
+          <text x="15"  y="115" text-anchor="middle" font-size="22">★</text>
+          <text x="30"  y="70"  text-anchor="middle" font-size="22">★</text>
+          <text x="70"  y="30"  text-anchor="middle" font-size="22">★</text>
+          <text x="120" y="22"  text-anchor="middle" font-size="22">★</text>
+        </svg>
+      </div>
+      <div class="slide-num">01 / 06</div>
+      <div class="flag-emoji">🇨🇻</div>
+      <div class="tag">Mundial 2026</div>
+      <h1>Cabo<br>Verde</h1>
+      <div class="subtitle">La Gloria del Atlántico</div>
+      <p>Una nación de islas que conquistó el mundo con su garra, su ritmo y su corazón.</p>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+    <!-- SLIDE 2 — El Camino -->
+    <div class="slide s2">
+      <div class="slide-num">02 / 06</div>
+      <div class="tag">El Camino</div>
+      <h2>De las<br>Islas al<br>Mundo</h2>
+      <div class="divider"></div>
+      <p>Con apenas 600,000 habitantes, Cabo Verde desafió a gigantes del fútbol africano. Derrotó a rivales históricos en la clasificatoria para escribir su nombre en la historia.</p>
+      <br>
+      <div>
+        <span class="pill">Clasificatoria CAF</span>
+        <span class="pill">Grupo A</span>
+        <span class="pill gold">1er Mundial</span>
+      </div>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+    <!-- SLIDE 3 — Figura -->
+    <div class="slide s3">
+      <div class="slide-num">03 / 06</div>
+      <div class="tag">La Estrella</div>
+      <h2>Ryan<br>Mendes</h2>
+      <div class="subtitle">El Mago del Atlántico</div>
+      <p>El capitán que lideró con alma y técnica. Sus regates hipnotizaron a defensas de todo el continente y encendieron la pasión de un pueblo entero.</p>
+      <div class="divider"></div>
+      <div>
+        <span class="pill gold">Capitán</span>
+        <span class="pill">Goleador</span>
+        <span class="pill">Elegancia pura</span>
+      </div>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+    <!-- SLIDE 4 — Estadística -->
+    <div class="slide s4">
+      <div class="slide-num">04 / 06</div>
+      <div class="tag">Números históricos</div>
+      <div class="big-stat">1°</div>
+      <div class="stat-label">Copa del Mundo en su historia</div>
+      <h2>Récords<br>Rotos</h2>
+      <div class="divider"></div>
+      <div>
+        <span class="pill gold">Selección más pequeña del torneo</span>
+      </div>
+      <br>
+      <p>Primera selección del África Occidental Atlántica en superar la fase de grupos de un Mundial. Una hazaña que el mundo no olvidará.</p>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+    <!-- SLIDE 5 — El gol -->
+    <div class="slide s5">
+      <div class="slide-num">05 / 06</div>
+      <div class="tag">El Momento</div>
+      <div class="quote">"¡Goool de Cabo Verde! ¡Las islas hacen temblar el mundo!"</div>
+      <div class="divider"></div>
+      <p>El primer gol en un Mundial fue un estallido de emoción colectiva. Jugadores, afición y toda una nación llorando de alegría bajo el cielo del Atlántico.</p>
+      <br>
+      <div>
+        <span class="pill">Minuto de la historia</span>
+        <span class="pill gold">Gol inmortal</span>
+      </div>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+    <!-- SLIDE 6 — Cierre -->
+    <div class="slide s6">
+      <div class="slide-num">06 / 06</div>
+      <div class="flag-emoji">🇨🇻⚽🏆</div>
+      <div class="tag">Orgullo eterno</div>
+      <h2>Sharks<br>para<br>siempre</h2>
+      <div class="divider"></div>
+      <p>Los <strong>Tubarões Azuis</strong> — los Tiburones Azules — mostraron que el tamaño de un país no limita la grandeza de su espíritu.</p>
+      <br>
+      <div>
+        <span class="pill gold">Cabo Verde 🇨🇻</span>
+        <span class="pill">Mundial 2026</span>
+        <span class="pill">Leyenda</span>
+      </div>
+      <div class="bottom-brand">CARRUSEL • FÚTBOL 2026</div>
+    </div>
+
+  </div><!-- /.carousel -->
+
+  <div class="nav">
+    <button onclick="move(-1)">&#8592;</button>
+    <div class="dots" id="dots"></div>
+    <button onclick="move(1)">&#8594;</button>
+  </div>
+  <div class="slide-count" id="slide-count">1 de 6</div>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const dotsEl = document.getElementById('dots');
+  const countEl = document.getElementById('slide-count');
+  let current = 0;
+
+  // Build dots
+  slides.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 0 ? ' active' : '');
+    d.onclick = () => goTo(i);
+    dotsEl.appendChild(d);
+  });
+
+  function goTo(n) {
+    slides[current].classList.remove('active');
+    dotsEl.children[current].classList.remove('active');
+    current = (n + slides.length) % slides.length;
+    slides[current].classList.add('active');
+    dotsEl.children[current].classList.add('active');
+    countEl.textContent = `${current + 1} de ${slides.length}`;
+  }
+
+  function move(dir) { goTo(current + dir); }
+
+  // Keyboard navigation
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight') move(1);
+    if (e.key === 'ArrowLeft')  move(-1);
+  });
+
+  // Touch/swipe
+  let startX = 0;
+  const c = document.querySelector('.carousel');
+  c.addEventListener('touchstart', e => { startX = e.touches[0].clientX; });
+  c.addEventListener('touchend',   e => {
+    const diff = startX - e.changedTouches[0].clientX;
+    if (Math.abs(diff) > 40) move(diff > 0 ? 1 : -1);
+  });
+</script>
+</body>
+</html>
