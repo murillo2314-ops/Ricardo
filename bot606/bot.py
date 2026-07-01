@@ -87,15 +87,21 @@ BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
 # debe ser el del EMISOR de la factura.
 CONSUMER_RNC = os.environ.get("CONSUMER_RNC", "131545157")
 
-# Conversation states  (simplificado: foto → ubicación → categoría → confirmar)
+# Conversation states.
+#   Individual: foto → ubicación → categoría → confirmar
+#   Lote:       modo → (recolectar fotos | PDF) → ubicación → categoría →
+#               procesar → lista → (revisar tarjeta) → confirmar
 (
-    S_PHOTO,
-    S_LOCATION,
-    S_CATEGORY,
-    S_CONFIRM,
-    S_EDIT_SELECT,
-    S_EDIT_VALUE,
-) = range(6)
+    S_MODE,        # elegir "individual" o "lote de fotos"
+    S_PHOTO,       # esperando una foto (individual)
+    S_COLLECT,     # recolectando fotos de un lote
+    S_LOCATION,    # elegir ubicación
+    S_CATEGORY,    # elegir categoría
+    S_CONFIRM,     # revisión + confirmar (individual y tarjeta de lote)
+    S_BATCH_LIST,  # lista del lote con ✅ Aceptar / 🔍 Revisar por factura
+    S_EDIT_SELECT, # elegir campo a corregir
+    S_EDIT_VALUE,  # escribir nuevo valor
+) = range(9)
 
 LOCATIONS   = ["Punta Cana", "Santo Domingo"]
 CATEGORIES  = ["Casa", "Obra"]
@@ -206,19 +212,29 @@ def init_db():
             conn.execute("ALTER TABLE facturas ADD COLUMN usuario TEXT")
         if "tipo_gasto" not in cols:
             conn.execute("ALTER TABLE facturas ADD COLUMN tipo_gasto TEXT DEFAULT '02'")
+        if "revisada_manual" not in cols:
+            # 1 = un humano abrió y confirmó la factura → ya no cuenta como pendiente,
+            # aunque tenga advertencias. Se usa para que "corregidas ≠ pendientes".
+            conn.execute("ALTER TABLE facturas ADD COLUMN revisada_manual INTEGER DEFAULT 0")
         conn.commit()
 
 
 def save_factura(mes: str, location: str, category: str, data: dict,
-                 usuario: str = "", tipo_gasto: str = "02") -> int:
+                 usuario: str = "", tipo_gasto: str = "02",
+                 reviewed: bool = False) -> int:
+    """Guarda la factura. Si `reviewed=True` (un humano la abrió y confirmó en su
+    tarjeta de revisión), queda marcada como revisada manual y NO cuenta como
+    pendiente aunque tenga advertencias — así 'corregidas ≠ pendientes'."""
+    needs_review = 0 if reviewed else (1 if data.get("_needs_review") else 0)
     with get_db() as conn:
         cur = conn.execute("""
             INSERT INTO facturas
               (mes, location, category, filename, rnc, ncf, nombre,
                fecha_comp, fecha_pago, total, itbis, base, propina,
                metodo, tipo_cf, observaciones, qr_verified,
-               nivel_confianza, advertencias, needs_review, raw_json, usuario, tipo_gasto)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               nivel_confianza, advertencias, needs_review, raw_json, usuario,
+               tipo_gasto, revisada_manual)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             mes, location, category,
             data.get("_filename", ""),
@@ -237,10 +253,11 @@ def save_factura(mes: str, location: str, category: str, data: dict,
             1 if data.get("_qr_verified") else 0,
             data.get("nivel_confianza", "ALTO"),
             json.dumps(data.get("_warnings") or []),
-            1 if data.get("_needs_review") else 0,
+            needs_review,
             json.dumps(data),
             usuario,
             tipo_gasto,
+            1 if reviewed else 0,
         ))
         conn.commit()
         return cur.lastrowid
@@ -488,6 +505,28 @@ async def extract_invoice(image_bytes: bytes, filename: str) -> dict:
     return validate_and_fix(data, qr)
 
 
+def render_pdf_pages(pdf_bytes: bytes, dpi: int = 200, max_pages: int = 40) -> list[bytes]:
+    """Rasteriza cada página del PDF a JPEG (bytes). Diseño: 1 página = 1 factura.
+    Devuelve una lista de bytes JPEG (una por página). `max_pages` es un tope de
+    seguridad. Importa PyMuPDF de forma perezosa para no cargarlo si no hace falta."""
+    import fitz  # PyMuPDF
+    from PIL import Image
+    pages: list[bytes] = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            pix = page.get_pixmap(dpi=dpi, alpha=False)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            pages.append(buf.getvalue())
+    finally:
+        doc.close()
+    return pages
+
+
 # ──────────────────────────────────────────────────────────────
 # FORMATO DE MENSAJES
 # ──────────────────────────────────────────────────────────────
@@ -621,6 +660,19 @@ def confirm_keyboard(mes: str = "") -> InlineKeyboardMarkup:
     ])
 
 
+def batch_review_keyboard() -> InlineKeyboardMarkup:
+    """Teclado de la tarjeta de revisión cuando la factura viene de un lote.
+    Sin 'cambiar mes': en lote el mes es automático por la fecha de cada factura."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Aceptar",  callback_data="bconf_accept"),
+            InlineKeyboardButton("✏️ Corregir", callback_data="confirm_edit"),
+            InlineKeyboardButton("❌ Descartar", callback_data="bconf_discard"),
+        ],
+        [InlineKeyboardButton("↩️ Volver a la lista", callback_data="bconf_back")],
+    ])
+
+
 def tipo_gasto_edit_keyboard(selected: str = "") -> InlineKeyboardMarkup:
     rows = []
     for code, label in TIPO_GASTO_OPTIONS:
@@ -710,9 +762,13 @@ def user_label(update: Update) -> str:
 
 
 def _CLEANUP(context):
-    """Limpia los datos de la factura activa del contexto."""
+    """Limpia los datos de la factura/lote activos del contexto."""
     for key in ("pending_invoice", "location", "category", "tipo_gasto",
-                "edit_field", "pending_photo_id", "mes_elegido"):
+                "edit_field", "pending_photo_id", "mes_elegido",
+                # lote:
+                "mode", "batch_photo_ids", "batch_pdf_file_id", "batch_items",
+                "batch_report", "batch_months", "batch_index",
+                "batch_status_msg_id"):
         context.user_data.pop(key, None)
 
 
@@ -724,6 +780,10 @@ def _review_msg_and_kb(context) -> tuple[str, InlineKeyboardMarkup]:
     tg       = context.user_data.get("tipo_gasto", "02")
     mes      = resolve_mes(context, data)
     msg = format_review_message(data, location, category, mes, tg)
+    # Si la factura viene de un lote, la tarjeta usa los botones de lote
+    # (Aceptar/Corregir/Descartar/Volver a la lista) en vez de los de individual.
+    if context.user_data.get("batch_index") is not None:
+        return msg, batch_review_keyboard()
     return msg, confirm_keyboard(mes)
 
 
@@ -733,13 +793,27 @@ def _review_msg_and_kb(context) -> tuple[str, InlineKeyboardMarkup]:
 # ──────────────────────────────────────────────────────────────
 
 async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicio del flujo. Si llegó foto directamente, la procesa ya."""
+    """Entrada. Foto directa → individual. PDF directo → lote. Si no, menú de modo."""
     if not is_allowed(update): return ConversationHandler.END
     _CLEANUP(context)
-    if update.message and update.message.photo:
-        return await _process_photo(update.message, context, update.message.photo[-1].file_id)
-    await update.message.reply_text("📸 Envía la foto de la factura.")
-    return S_PHOTO
+    msg = update.message
+    if msg and msg.photo:
+        context.user_data["mode"] = "single"
+        return await _process_photo(msg, context, msg.photo[-1].file_id)
+    if msg and msg.document and (msg.document.mime_type == "application/pdf"):
+        return await _start_pdf(msg, context, msg.document.file_id)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📷 Factura individual", callback_data="mode_single")],
+        [InlineKeyboardButton("🗂️ Lote de fotos",       callback_data="mode_batch")],
+    ])
+    await msg.reply_text(
+        "¿Cómo quieres subir la(s) factura(s)?\n\n"
+        "📷 *Individual* — una sola foto\n"
+        "🗂️ *Lote de fotos* — varias fotos de una vez\n"
+        "📄 *PDF* — solo envíame el PDF, lo detecto solo (1 factura por página)",
+        reply_markup=kb, parse_mode="Markdown",
+    )
+    return S_MODE
 
 
 async def _process_photo(reply_to, context: ContextTypes.DEFAULT_TYPE, file_id: str) -> int:
@@ -830,10 +904,28 @@ async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Categoría elegida → mostrar revisión completa con tipo de gasto auto-detectado."""
+    """Categoría elegida. Individual → revisión. Lote de fotos → recolectar. PDF → procesar."""
     query = update.callback_query
     await query.answer()
     context.user_data["category"] = query.data.replace("cat_", "")
+    mode = context.user_data.get("mode", "single")
+
+    if mode == "batch_photo":
+        m = await query.edit_message_text(
+            "📷 Envíame *todas* las fotos del lote (una por una o en álbum).\n"
+            "Cuando termines, toca *✅ Finalizado*.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Finalizado (0)", callback_data="batch_done")]]),
+            parse_mode="Markdown",
+        )
+        context.user_data["batch_status_msg_id"] = m.message_id
+        return S_COLLECT
+
+    if mode == "batch_pdf":
+        status = await query.edit_message_text("⏳ Abriendo el PDF…")
+        return await _run_pdf_batch(status, context)
+
+    # individual
     msg, kb = _review_msg_and_kb(context)
     await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
     return S_CONFIRM
@@ -883,7 +975,9 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tipo_gasto = context.user_data.get("tipo_gasto", "02")
 
     context.user_data["mes_activo"] = mes
-    fac_id = save_factura(mes, location, category, data, user_label(update), tipo_gasto)
+    # El usuario vio la tarjeta de revisión y aceptó → revisada manual (no pendiente).
+    fac_id = save_factura(mes, location, category, data, user_label(update),
+                          tipo_gasto, reviewed=True)
 
     facturas  = get_facturas(mes)
     total_mes = sum(f["total"] for f in facturas)
@@ -1097,6 +1191,376 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if update.message:
         await update.message.reply_text("Operación cancelada. Usa /nueva para empezar.")
     return ConversationHandler.END
+
+
+# ──────────────────────────────────────────────────────────────
+# CONVERSATION: LOTE (varias facturas de una vez — fotos o PDF)
+# Flujo: modo → ubicación → categoría → (recolectar fotos | PDF) →
+#        procesar en paralelo → lista → aceptar/revisar cada una
+# ──────────────────────────────────────────────────────────────
+
+async def on_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Botón de modo (individual / lote de fotos)."""
+    query = update.callback_query
+    await query.answer()
+    if query.data == "mode_single":
+        context.user_data["mode"] = "single"
+        await query.edit_message_text("📸 Envía la foto de la factura.")
+        return S_PHOTO
+    # lote de fotos → pedir ubicación primero
+    context.user_data["mode"] = "batch_photo"
+    context.user_data["batch_photo_ids"] = []
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
+    ]])
+    await query.edit_message_text(
+        "🗂️ *Lote de fotos*\n\n📍 ¿Dónde fue este lote de compras?",
+        reply_markup=kb, parse_mode="Markdown",
+    )
+    return S_LOCATION
+
+
+async def _start_pdf(message, context: ContextTypes.DEFAULT_TYPE, file_id: str) -> int:
+    """PDF recibido → modo lote, pedir ubicación."""
+    context.user_data["mode"] = "batch_pdf"
+    context.user_data["batch_pdf_file_id"] = file_id
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
+    ]])
+    await message.reply_text(
+        "📄 *PDF recibido* — 1 factura por página.\n\n📍 ¿Dónde fue este lote de compras?",
+        reply_markup=kb, parse_mode="Markdown",
+    )
+    return S_LOCATION
+
+
+async def got_pdf_in_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """PDF enviado mientras estamos esperando 'otra' foto (estado S_PHOTO)."""
+    if not is_allowed(update): return ConversationHandler.END
+    _CLEANUP(context)
+    return await _start_pdf(update.message, context, update.message.document.file_id)
+
+
+async def batch_collect_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Foto recibida en modo lote → acumular y actualizar el contador."""
+    if not is_allowed(update): return ConversationHandler.END
+    ids = context.user_data.setdefault("batch_photo_ids", [])
+    ids.append(update.message.photo[-1].file_id)
+    n = len(ids)
+    try:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=context.user_data.get("batch_status_msg_id"),
+            text=f"📷 *{n}* foto(s) recibida(s).\nEnvía más o toca *✅ Finalizado*.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"✅ Finalizado ({n})", callback_data="batch_done")]]),
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass  # ediciones rápidas (álbum) pueden fallar; no es crítico
+    return S_COLLECT
+
+
+async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """'Finalizado' → descargar fotos y procesar el lote."""
+    query = update.callback_query
+    ids = context.user_data.get("batch_photo_ids", [])
+    if not ids:
+        await query.answer("Aún no has enviado fotos.", show_alert=True)
+        return S_COLLECT
+    await query.answer()
+    status = await query.edit_message_text(f"⏳ Descargando {len(ids)} foto(s)…")
+    images = []
+    for i, fid in enumerate(ids):
+        try:
+            f = await context.bot.get_file(fid)
+            buf = io.BytesIO()
+            await f.download_to_memory(buf)
+            images.append((buf.getvalue(), f"foto_{i+1}.jpg"))
+        except Exception as e:
+            log.error("Descarga de foto %s falló: %s", fid, e)
+    await _process_batch_images(images, context, status)
+    return await _show_batch_list(status, context)
+
+
+async def _run_pdf_batch(status_msg, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Descarga el PDF, lo rasteriza y procesa el lote."""
+    try:
+        f = await context.bot.get_file(context.user_data["batch_pdf_file_id"])
+        buf = io.BytesIO()
+        await f.download_to_memory(buf)
+        pages = await asyncio.to_thread(render_pdf_pages, buf.getvalue())
+    except Exception as e:
+        log.error("Error abriendo PDF: %s", e)
+        await status_msg.edit_text("❌ No pude abrir el PDF. ¿Está dañado? Intenta reenviarlo.")
+        _CLEANUP(context)
+        return ConversationHandler.END
+    if not pages:
+        await status_msg.edit_text("❌ El PDF no tiene páginas legibles.")
+        _CLEANUP(context)
+        return ConversationHandler.END
+    images = [(pg, f"pdf_p{i+1}.jpg") for i, pg in enumerate(pages)]
+    await _process_batch_images(images, context, status_msg)
+    return await _show_batch_list(status_msg, context)
+
+
+async def _process_batch_images(images, context: ContextTypes.DEFAULT_TYPE, status_msg):
+    """Extrae en paralelo (tope 5), clasifica (ilegibles/duplicados/válidas) y
+    llena context.user_data['batch_items'] y ['batch_report']."""
+    total = len(images)
+    sem = asyncio.Semaphore(5)
+    done = 0
+
+    async def one(img_bytes, fn):
+        nonlocal done
+        async with sem:
+            data = await extract_invoice(img_bytes, fn)
+        done += 1
+        if done % 3 == 0 or done == total:
+            try:
+                await status_msg.edit_text(f"⏳ Procesando {done}/{total} facturas…")
+            except Exception:
+                pass
+        return data
+
+    results = await asyncio.gather(*[one(b, fn) for b, fn in images])
+
+    items = []
+    seen_ncf = set()
+    dups = unreadable = 0
+    for data in results:
+        if data.get("_error") or (
+            not data.get("ncf") and float(data.get("total_facturado") or 0) == 0
+        ):
+            unreadable += 1
+            continue
+        ncf = data.get("ncf", "")
+        if ncf and (ncf in seen_ncf or check_duplicate_ncf(ncf)):
+            dups += 1
+            continue
+        if ncf:
+            seen_ncf.add(ncf)
+        items.append({
+            "data": data,
+            "tipo_gasto": suggest_tipo_gasto(data),
+            "status": "pending",   # pending | accepted | discarded
+        })
+
+    context.user_data["batch_items"]  = items
+    context.user_data["batch_report"] = {"dups": dups, "unreadable": unreadable}
+    context.user_data["batch_months"] = set()
+
+
+def _batch_list_text(context) -> str:
+    """Texto PLANO (sin Markdown, a prueba de nombres con símbolos) de la lista."""
+    items = context.user_data.get("batch_items", [])
+    rep   = context.user_data.get("batch_report", {})
+    lines = [f"📄 Lote — {len(items)} factura(s) leída(s)"]
+    extra = []
+    if rep.get("dups"):       extra.append(f"🔁 {rep['dups']} duplicada(s)")
+    if rep.get("unreadable"): extra.append(f"📄 {rep['unreadable']} ilegible(s)")
+    if extra:
+        lines.append("(" + " · ".join(extra) + " omitidas)")
+    lines.append("⚠️ = el bot sugiere revisar\n")
+    for i, it in enumerate(items, 1):
+        d = it["data"]
+        nombre = (d.get("nombre_proveedor") or "—")[:26]
+        total  = float(d.get("total_facturado") or 0)
+        st = it.get("status")
+        mark = "✅" if st == "accepted" else "❌" if st == "discarded" else \
+               ("⚠️" if d.get("_warnings") else "•")
+        lines.append(f"{i}. {mark} {nombre} — RD$ {total:,.2f}")
+    pend = sum(1 for it in items if it.get("status") == "pending")
+    lines.append("")
+    if pend:
+        lines.append(f"Faltan {pend} por decidir: acepta las buenas o revisa las dudosas 🔍.")
+    else:
+        lines.append("Todas decididas. Toca 🏁 Terminar.")
+    return "\n".join(lines)
+
+
+def _batch_list_keyboard(context) -> InlineKeyboardMarkup:
+    items = context.user_data.get("batch_items", [])
+    rows = []
+    for i, it in enumerate(items):
+        if it.get("status") != "pending":
+            continue
+        nombre = (it["data"].get("nombre_proveedor") or f"#{i+1}")[:16]
+        rows.append([
+            InlineKeyboardButton(f"✅ {i+1}. {nombre}", callback_data=f"bacc_{i}"),
+            InlineKeyboardButton("🔍 Revisar",          callback_data=f"brev_{i}"),
+        ])
+    pend = sum(1 for it in items if it.get("status") == "pending")
+    if pend:
+        rows.append([InlineKeyboardButton(
+            f"✅ Aceptar TODAS ({pend}) las que faltan", callback_data="baccall")])
+    else:
+        rows.append([InlineKeyboardButton("🏁 Terminar", callback_data="bfin")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_batch_list(status_msg, context: ContextTypes.DEFAULT_TYPE) -> int:
+    items = context.user_data.get("batch_items", [])
+    if not items:
+        rep = context.user_data.get("batch_report", {})
+        await status_msg.edit_text(
+            "No pude leer ninguna factura de este lote.\n"
+            f"🔁 {rep.get('dups', 0)} duplicada(s) · 📄 {rep.get('unreadable', 0)} ilegible(s).\n\n"
+            "Revisa que las fotos/páginas se vean bien e inténtalo de nuevo."
+        )
+        _CLEANUP(context)
+        return ConversationHandler.END
+    await status_msg.edit_text(_batch_list_text(context),
+                               reply_markup=_batch_list_keyboard(context))
+    return S_BATCH_LIST
+
+
+async def _refresh_batch_list(query, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        await query.edit_message_text(_batch_list_text(context),
+                                      reply_markup=_batch_list_keyboard(context))
+    except Exception:
+        pass
+    return S_BATCH_LIST
+
+
+def _save_batch_item(context, update, it, reviewed: bool) -> int:
+    """Guarda una factura del lote. Mes automático por su fecha; ubicación/categoría
+    del lote; tipo de gasto propio. Registra el mes para la subida a Drive final."""
+    data = it["data"]
+    location = context.user_data.get("location", "—")
+    category = context.user_data.get("category", "—")
+    mes = resolve_mes(context, data)  # sin mes_elegido → automático por fecha
+    tg  = it.get("tipo_gasto", "02")
+    fac_id = save_factura(mes, location, category, data,
+                          user_label(update), tg, reviewed=reviewed)
+    context.user_data.setdefault("batch_months", set()).add(mes)
+    it["status"] = "accepted"
+    it["saved_id"] = fac_id
+    return fac_id
+
+
+async def _finish_batch(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Sube a Drive UNA vez por cada mes afectado y arma el resumen. Limpia el estado."""
+    months = context.user_data.get("batch_months") or set()
+    items  = context.user_data.get("batch_items", [])
+    rep    = context.user_data.get("batch_report", {})
+
+    drive_note = ""
+    if months and drive_sync.is_configured():
+        ok = 0
+        for m in sorted(months):
+            try:
+                xlsx = build_excel(get_facturas(m), m)
+                link = await asyncio.to_thread(drive_sync.sync_excel, xlsx, f"606_{m}.xlsx")
+                if link:
+                    ok += 1
+            except Exception as e:
+                log.error("Drive sync lote (%s): %s", m, e)
+        drive_note = f"\n☁️ Excel actualizado en Drive ({ok}/{len(months)} mes/es)."
+
+    acc  = sum(1 for it in items if it.get("status") == "accepted")
+    disc = sum(1 for it in items if it.get("status") == "discarded")
+    meses_txt = ", ".join(mes_label(m) for m in sorted(months)) if months else "—"
+    summary = (
+        "🎉 *Lote terminado*\n\n"
+        f"✅ {acc} guardada(s)\n"
+        + (f"❌ {disc} descartada(s)\n" if disc else "")
+        + (f"🔁 {rep.get('dups', 0)} duplicada(s) omitida(s)\n" if rep.get("dups") else "")
+        + (f"📄 {rep.get('unreadable', 0)} ilegible(s) omitida(s)\n" if rep.get("unreadable") else "")
+        + (f"📊 Meses: {meses_txt}" if acc else "")
+        + drive_note
+    )
+    _CLEANUP(context)
+    return summary
+
+
+async def batch_accept_one(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ Aceptar (sin abrir) una factura de la lista."""
+    query = update.callback_query
+    i = int(query.data.replace("bacc_", ""))
+    items = context.user_data.get("batch_items", [])
+    if 0 <= i < len(items) and items[i].get("status") == "pending":
+        _save_batch_item(context, update, items[i], reviewed=False)
+        await query.answer("Guardada ✅")
+    else:
+        await query.answer()
+    return await _refresh_batch_list(query, context)
+
+
+async def batch_review_one(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """🔍 Revisar una factura → abrir su tarjeta."""
+    query = update.callback_query
+    await query.answer()
+    i = int(query.data.replace("brev_", ""))
+    items = context.user_data.get("batch_items", [])
+    if not (0 <= i < len(items)):
+        return S_BATCH_LIST
+    it = items[i]
+    context.user_data["batch_index"]     = i
+    context.user_data["pending_invoice"] = it["data"]
+    context.user_data["tipo_gasto"]      = it.get("tipo_gasto", "02")
+    msg, kb = _review_msg_and_kb(context)
+    await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
+    return S_CONFIRM
+
+
+async def batch_accept_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ Aceptar todas las que faltan (tal cual) y terminar."""
+    query = update.callback_query
+    await query.answer("Guardando…")
+    for it in context.user_data.get("batch_items", []):
+        if it.get("status") == "pending":
+            _save_batch_item(context, update, it, reviewed=False)
+    summary = await _finish_batch(context)
+    await query.edit_message_text(summary, parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+async def batch_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """🏁 Terminar (cuando ya no hay pendientes)."""
+    query = update.callback_query
+    await query.answer()
+    summary = await _finish_batch(context)
+    await query.edit_message_text(summary, parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+async def batch_conf_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Aceptar desde la tarjeta de revisión del lote → guardar (revisada) y volver."""
+    query = update.callback_query
+    await query.answer("Guardada ✅")
+    i = context.user_data.get("batch_index")
+    items = context.user_data.get("batch_items", [])
+    if i is not None and 0 <= i < len(items):
+        items[i]["data"]       = context.user_data.get("pending_invoice", items[i]["data"])
+        items[i]["tipo_gasto"] = context.user_data.get("tipo_gasto", items[i].get("tipo_gasto", "02"))
+        _save_batch_item(context, update, items[i], reviewed=True)
+    context.user_data["batch_index"] = None
+    context.user_data.pop("pending_invoice", None)
+    return await _refresh_batch_list(query, context)
+
+
+async def batch_conf_discard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Descartar esta factura del lote."""
+    query = update.callback_query
+    await query.answer("Descartada")
+    i = context.user_data.get("batch_index")
+    items = context.user_data.get("batch_items", [])
+    if i is not None and 0 <= i < len(items):
+        items[i]["status"] = "discarded"
+    context.user_data["batch_index"] = None
+    context.user_data.pop("pending_invoice", None)
+    return await _refresh_batch_list(query, context)
+
+
+async def batch_conf_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """↩️ Volver a la lista sin decidir esta factura."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["batch_index"] = None
+    context.user_data.pop("pending_invoice", None)
+    return await _refresh_batch_list(query, context)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1585,12 +2049,21 @@ def main():
             CommandHandler("nueva", start_flow),
             MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
+            MessageHandler(filters.Document.PDF & filters.ChatType.PRIVATE, start_flow),
         ],
         states={
+            S_MODE: [
+                CallbackQueryHandler(on_mode, pattern="^mode_"),
+            ],
             S_PHOTO: [
                 MessageHandler(filters.PHOTO, got_photo),
+                MessageHandler(filters.Document.PDF, got_pdf_in_flow),
                 CallbackQueryHandler(otra_factura, pattern="^otra_factura$"),
                 CallbackQueryHandler(fin_lote,     pattern="^fin_lote$"),
+            ],
+            S_COLLECT: [
+                MessageHandler(filters.PHOTO, batch_collect_photo),
+                CallbackQueryHandler(batch_done, pattern="^batch_done$"),
             ],
             S_LOCATION: [
                 CallbackQueryHandler(got_location, pattern="^loc_"),
@@ -1605,6 +2078,16 @@ def main():
                 CallbackQueryHandler(confirm_cancel,        pattern="^confirm_cancel$"),
                 CallbackQueryHandler(on_confirm_change_mes, pattern="^confirm_change_mes$"),
                 CallbackQueryHandler(on_cmes_picked,        pattern="^cmes_"),
+                # tarjeta de revisión dentro de un lote
+                CallbackQueryHandler(batch_conf_accept,  pattern="^bconf_accept$"),
+                CallbackQueryHandler(batch_conf_discard, pattern="^bconf_discard$"),
+                CallbackQueryHandler(batch_conf_back,    pattern="^bconf_back$"),
+            ],
+            S_BATCH_LIST: [
+                CallbackQueryHandler(batch_accept_one, pattern=r"^bacc_\d+$"),
+                CallbackQueryHandler(batch_review_one, pattern=r"^brev_\d+$"),
+                CallbackQueryHandler(batch_accept_all, pattern="^baccall$"),
+                CallbackQueryHandler(batch_finish,     pattern="^bfin$"),
             ],
             S_EDIT_SELECT: [
                 CallbackQueryHandler(edit_field_selected,  pattern="^edit_"),
