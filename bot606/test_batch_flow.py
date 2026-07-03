@@ -130,6 +130,16 @@ def upd_photo(fid, media_group=None):
     return {"update_id": next(_upd_id), "message": msg}
 
 
+def upd_pdf(fid, name="facturas.pdf"):
+    return {"update_id": next(_upd_id),
+            "message": {"message_id": next(_msg_id), "date": int(time.time()),
+                        "chat": _chat(), "from": _user(),
+                        "document": {"file_id": fid,
+                                     "file_unique_id": "u" + fid,
+                                     "file_name": name,
+                                     "mime_type": "application/pdf"}}}
+
+
 def upd_cq(data, message_id):
     return {"update_id": next(_upd_id),
             "callback_query": {
@@ -251,6 +261,75 @@ async def run():
     guardadas = bot.get_facturas("2026-06")
     check(len(guardadas) == 6,
           f"total 6 facturas guardadas (hay {len(guardadas)})")
+
+    print("\n— Escenario D: foto individual (sin álbum) —")
+    await drive(upd_photo("SOLO1"))  # sin media_group_id
+    check(ud.get("mode") == "single", "foto suelta entra en modo individual")
+    check(state() == bot.S_LOCATION, "pregunta ubicación de la compra")
+    await drive(upd_cq(f"loc_{bot.LOCATIONS[0]}", fake.last_message_id))
+    await drive(upd_cq(f"cat_{bot.CATEGORIES[0]}", fake.last_message_id))
+    check(state() == bot.S_CONFIRM, "muestra la tarjeta de revisión")
+    await drive(upd_cq("confirm_accept", fake.last_message_id))
+    guardadas = bot.get_facturas("2026-06")
+    check(len(guardadas) == 7,
+          f"la factura individual quedó guardada (hay {len(guardadas)})")
+    await drive(upd_cq("fin_lote", fake.last_message_id))
+    check(state() is None, "Terminar cierra la conversación")
+
+    print("\n— Escenario E: PDF directo (1 factura por página) —")
+    bot.render_pdf_pages = lambda pdf_bytes, **kw: [b"PG1", b"PG2"]
+    await drive(upd_pdf("PDF1"))
+    check(ud.get("mode") == "batch_pdf", "PDF directo entra en modo lote PDF")
+    check(state() == bot.S_LOCATION, "PDF → pregunta ubicación")
+    await drive(upd_cq(f"loc_{bot.LOCATIONS[1]}", fake.last_message_id))
+    await drive(upd_cq(f"cat_{bot.CATEGORIES[1]}", fake.last_message_id))
+    items = ud.get("batch_items") or []
+    check(len(items) == 2,
+          f"2 páginas del PDF procesadas como facturas (hay {len(items)})")
+    check(state() == bot.S_BATCH_LIST, "lista del lote PDF (S_BATCH_LIST)")
+    await drive(upd_cq("baccall", fake.last_message_id))
+    guardadas = bot.get_facturas("2026-06")
+    check(len(guardadas) == 9,
+          f"total 9 facturas guardadas (hay {len(guardadas)})")
+
+    print("\n— Escenario F: fechas en formato latino (DD/MM/AAAA) —")
+    nf = bot.normalize_fecha
+    check(nf("15/06/2026") == "2026-06-15", "acepta DD/MM/AAAA")
+    check(nf("15-06-2026") == "2026-06-15", "acepta DD-MM-AAAA")
+    check(nf("5/6/26") == "2026-06-05", "acepta D/M/AA")
+    check(nf("2026-06-15") == "2026-06-15", "ISO pasa igual")
+    check(nf("31/02/x") == "" and nf("ayer") == "", "basura no pasa")
+    check(bot.fecha_display("2026-06-15") == "15/06/2026",
+          "se muestra como 15/06/2026")
+    vf = bot.validate_and_fix({"_error": None, "fecha_comprobante": "15/06/2026",
+                               "total_facturado": 118, "itbis": 18,
+                               "monto_sin_itbis": 100, "rnc": "101000001",
+                               "ncf": "B0100000099"})
+    check(vf["fecha_comprobante"] == "2026-06-15",
+          "validate_and_fix normaliza fecha latina de la IA")
+
+    # Flujo real: corregir la fecha escribiéndola en formato latino
+    await drive(upd_photo("FCHA1"))
+    await drive(upd_cq(f"loc_{bot.LOCATIONS[0]}", fake.last_message_id))
+    await drive(upd_cq(f"cat_{bot.CATEGORIES[0]}", fake.last_message_id))
+    await drive(upd_cq("confirm_edit", fake.last_message_id))
+    await drive(upd_cq("edit_fecha", fake.last_message_id))
+    await drive(upd_text("no-es-fecha"))
+    check(state() == bot.S_EDIT_VALUE,
+          "fecha inválida se rechaza y sigue pidiendo el valor")
+    await drive(upd_text("20/06/2026"))
+    data = ud.get("pending_invoice") or {}
+    check(data.get("fecha_comprobante") == "2026-06-20",
+          "fecha editada '20/06/2026' queda ISO internamente")
+    check(state() == bot.S_CONFIRM, "vuelve a la tarjeta de revisión")
+    card_params = [p for a, p in fake.calls
+                   if a == "sendMessage" and "Fecha" in p.get("text", "")][-1]
+    check("20/06/2026" in card_params["text"],
+          "la tarjeta muestra la fecha en formato latino")
+    await drive(upd_cq("confirm_accept", fake.last_message_id))
+    check(len(bot.get_facturas("2026-06")) == 10,
+          "quedó guardada en el mes correcto (2026-06)")
+    await drive(upd_cq("fin_lote", fake.last_message_id))
 
     print("\n— Escenario C: escape de Markdown —")
     nombre_feo = "FERRE_MAX *SRL* [STO DGO]"

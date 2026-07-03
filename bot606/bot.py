@@ -400,7 +400,8 @@ def parse_ecf_url(qr_text: str) -> dict | None:
         fecha = None
         if fe := get("FechaEmision"):
             try:
-                d, m, y = fe.split("-"); fecha = f"{y}-{m}-{d}"
+                d, m, y = re.split(r"[-/]", fe)
+                fecha = normalize_fecha(f"{d}/{m}/{y}")
             except Exception:
                 pass
         if rnc and ncf and tot:
@@ -457,6 +458,16 @@ def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
         expected = 11 if ncf.startswith("B") else 13 if ncf.startswith("E") else None
         if expected and len(ncf) != expected:
             warns.append(f"⚠ NCF tiene {len(ncf)} chars (esperado {expected}: {ncf})")
+
+    # Fechas SIEMPRE en ISO interno (acepta DD/MM/AAAA latino y lo convierte).
+    for k in ("fecha_comprobante", "fecha_pago"):
+        raw = data.get(k)
+        if raw and str(raw).strip():
+            iso = normalize_fecha(raw)
+            if iso:
+                data[k] = iso
+            elif k == "fecha_comprobante":
+                warns.append(f"⚠ Fecha '{raw}' no legible — caería al mes actual")
 
     if (data.get("nivel_confianza") or "").upper() == "BAJO":
         warns.append("⚠ Imagen poco legible — verificar")
@@ -551,7 +562,7 @@ def format_review_message(data: dict, location: str, category: str,
         f"🏪 *{md(data.get('nombre_proveedor') or '—')}*\n"
         f"🔢 NCF: `{data.get('ncf') or '—'}`\n"
         f"🏢 RNC: `{data.get('rnc') or '—'}`\n"
-        f"📅 Fecha: {data.get('fecha_comprobante') or '—'}\n"
+        f"📅 Fecha: {fecha_display(data.get('fecha_comprobante'))}\n"
         f"{'─'*30}\n"
         f"📦 Base sin ITBIS:  RD$ *{float(data.get('monto_sin_itbis') or 0):,.2f}*\n"
         f"🧾 ITBIS:           RD$ *{float(data.get('itbis') or 0):,.2f}*\n"
@@ -709,6 +720,40 @@ def current_mes() -> str:
 
 def get_mes(context) -> str:
     return context.user_data.get("mes_activo", current_mes())
+
+def normalize_fecha(s) -> str:
+    """Normaliza una fecha a ISO YYYY-MM-DD (formato interno: BD, mes
+    automático, orden cronológico y Excel 606 dependen de él). Acepta el
+    formato latino DD/MM/AAAA (también DD-MM-AAAA y año de 2 dígitos) o ISO.
+    SIEMPRE interpreta día/mes/año (formato dominicano), nunca mes/día.
+    Devuelve '' si no se entiende."""
+    s = str(s or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+    if m:  # ya viene con el año primero (ISO)
+        y, mo, d = m.groups()
+    else:
+        m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$", s)
+        if not m:
+            return ""
+        d, mo, y = m.groups()
+        if len(y) == 2:
+            y = "20" + y
+    d, mo = int(d), int(mo)
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return ""
+    return f"{y}-{mo:02d}-{d:02d}"
+
+
+def fecha_display(iso) -> str:
+    """'2026-06-15' → '15/06/2026' (formato dominicano) para MOSTRAR al
+    usuario. Si el valor no es ISO se muestra tal cual; vacío → '—'."""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(iso or ""))
+    if m:
+        return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+    return str(iso or "—")
+
 
 def md(v) -> str:
     """Escapa los caracteres especiales del Markdown clásico de Telegram
@@ -1120,7 +1165,7 @@ async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
         "ncf":     data.get("ncf",""),
         "rnc":     data.get("rnc",""),
         "nombre":  data.get("nombre_proveedor",""),
-        "fecha":   data.get("fecha_comprobante",""),
+        "fecha":   fecha_display(data.get("fecha_comprobante","")),
         "metodo":  data.get("metodo_pago",""),
         "obs":     data.get("observaciones",""),
     }
@@ -1130,6 +1175,8 @@ async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
         metodo_hint = ("\n\nOpciones válidas:\n"
                        "EFECTIVO | TARJETA_CREDITO | TARJETA_DEBITO\n"
                        "TRANSFERENCIA | CHEQUE | CREDITO")
+    elif field == "fecha":
+        metodo_hint = "\n\nEscríbela como *DD/MM/AAAA* (ej. 15/06/2026)."
 
     valor_actual = str(current_values.get(field, "—")).replace("`", "'")
     await query.edit_message_text(
@@ -1177,7 +1224,15 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif field == "nombre":
             data["nombre_proveedor"] = new_val.upper()
         elif field == "fecha":
-            data["fecha_comprobante"] = new_val
+            iso = normalize_fecha(new_val)
+            if not iso:
+                await update.message.reply_text(
+                    f"⚠️ No entendí la fecha `{new_val.replace('`', chr(39))}`.\n"
+                    "Escríbela como *DD/MM/AAAA* (ej. 15/06/2026).",
+                    parse_mode="Markdown",
+                )
+                return S_EDIT_VALUE
+            data["fecha_comprobante"] = iso
         elif field == "metodo":
             data["metodo_pago"] = new_val.upper()
         elif field == "obs":
@@ -1747,7 +1802,7 @@ async def _render_resumen(reply_to, mes: str, filtro: str = "ALL"):
             base = round(total - itbis - prop, 2)
         tot_t += total; tot_b += base; tot_i += itbis; tot_p += prop
 
-        fecha  = f.get("fecha_comp") or "—"
+        fecha  = fecha_display(f.get("fecha_comp"))
         ncf    = f.get("ncf") or "—"
         loc    = f.get("location") or "—"
         cat    = f.get("category") or "—"
@@ -1758,7 +1813,7 @@ async def _render_resumen(reply_to, mes: str, filtro: str = "ALL"):
         qr     = "✅ " if f.get("qr_verified")  else ""
 
         line = (
-            f"*{i}. {adv}{qr}{nombre}*\n"
+            f"*{i}. {adv}{qr}{md(nombre)}*\n"
             f"  📅 {fecha}  •  NCF: `{ncf}`\n"
             f"  📍 {loc}/{cat}  •  {metodo}\n"
             f"  Base: {base:,.2f}  ITBIS: {itbis:,.2f}"
