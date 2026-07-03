@@ -89,8 +89,9 @@ CONSUMER_RNC = os.environ.get("CONSUMER_RNC", "131545157")
 
 # Conversation states.
 #   Individual: foto → ubicación → categoría → confirmar
-#   Lote:       modo → (recolectar fotos | PDF) → ubicación → categoría →
-#               procesar → lista → (revisar tarjeta) → confirmar
+#   Lote:       (menú "Lote de fotos" | álbum directo | PDF) → ubicación →
+#               categoría → recolectar fotos → procesar → lista →
+#               (revisar tarjeta) → confirmar
 (
     S_MODE,        # elegir "individual" o "lote de fotos"
     S_PHOTO,       # esperando una foto (individual)
@@ -547,7 +548,7 @@ def format_review_message(data: dict, location: str, category: str,
         f"📍 {location}  •  🏷️ {category}\n"
         f"{qr_badge}  {conf_icon} Confianza: {conf}\n"
         f"{'─'*30}\n"
-        f"🏪 *{data.get('nombre_proveedor') or '—'}*\n"
+        f"🏪 *{md(data.get('nombre_proveedor') or '—')}*\n"
         f"🔢 NCF: `{data.get('ncf') or '—'}`\n"
         f"🏢 RNC: `{data.get('rnc') or '—'}`\n"
         f"📅 Fecha: {data.get('fecha_comprobante') or '—'}\n"
@@ -566,7 +567,7 @@ def format_review_message(data: dict, location: str, category: str,
         tg_label = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
         msg += f"🏷️ Tipo de gasto: *{tipo_gasto}* — {tg_label}\n"
     if data.get("observaciones"):
-        msg += f"📝 {data['observaciones']}\n"
+        msg += f"📝 {md(data['observaciones'])}\n"
     if warns:
         msg += f"\n{'─'*30}\n" + "\n".join(warns)
     return msg
@@ -709,6 +710,13 @@ def current_mes() -> str:
 def get_mes(context) -> str:
     return context.user_data.get("mes_activo", current_mes())
 
+def md(v) -> str:
+    """Escapa los caracteres especiales del Markdown clásico de Telegram
+    (_ * ` [) en valores dinámicos —nombres de proveedor, observaciones—
+    para que no revienten el parseo (BadRequest: Can't parse entities)."""
+    return re.sub(r"([_*`\[])", r"\\\1", str(v if v is not None else ""))
+
+
 def clean_ncf(s: str) -> str:
     """Normaliza el NCF: mayúsculas y solo letras/números (quita guiones, espacios).
     Ej.: 'B01-0001234' → 'B010001234'  •  'E31-0000012345' → 'E310000012345'."""
@@ -793,11 +801,36 @@ def _review_msg_and_kb(context) -> tuple[str, InlineKeyboardMarkup]:
 # ──────────────────────────────────────────────────────────────
 
 async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entrada. Foto directa → individual. PDF directo → lote. Si no, menú de modo."""
+    """Entrada. Foto directa → individual. Álbum → lote automático. PDF → lote.
+    Si no, menú de modo.
+
+    OJO: con allow_reentry=True los entry points se evalúan ANTES que los
+    handlers del estado actual, así que TODA foto pasa por aquí aunque haya
+    un lote en armado. Por eso, si hay un lote recolectando fotos, la foto se
+    ACUMULA en el lote en vez de reiniciar la conversación (que era el bug de
+    'solo procesa 1 factura' y dejaba el botón Finalizado muerto)."""
     if not is_allowed(update): return ConversationHandler.END
-    _CLEANUP(context)
     msg = update.message
+    if (msg and msg.photo and context.user_data.get("mode") == "batch_photo"
+            and "batch_items" not in context.user_data):
+        return await _batch_append_photo(update, context)
+    _CLEANUP(context)
     if msg and msg.photo:
+        if msg.media_group_id:
+            # Álbum (varias fotos de una vez) → lote automático. Las demás
+            # fotos del álbum entran por la rama de arriba y se acumulan.
+            context.user_data["mode"] = "batch_photo"
+            context.user_data["batch_photo_ids"] = [msg.photo[-1].file_id]
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}")
+                for loc in LOCATIONS
+            ]])
+            await msg.reply_text(
+                "🗂️ *Álbum recibido* — lo proceso como lote de facturas.\n\n"
+                "📍 ¿Dónde fue este lote de compras?",
+                reply_markup=kb, parse_mode="Markdown",
+            )
+            return S_LOCATION
         context.user_data["mode"] = "single"
         return await _process_photo(msg, context, msg.photo[-1].file_id)
     if msg and msg.document and (msg.document.mime_type == "application/pdf"):
@@ -839,7 +872,7 @@ async def _process_photo(reply_to, context: ContextTypes.DEFAULT_TYPE, file_id: 
             await reply_to.reply_text(
                 f"⚠️ *Factura duplicada — no procesada*\n\n"
                 f"El NCF `{ncf}` ya existe en el sistema:\n"
-                f"🏪 {dup.get('nombre') or '?'}  •  RD$ {dup.get('total', 0):,.2f}  ({dup.get('mes', '')})\n\n"
+                f"🏪 {md(dup.get('nombre') or '?')}  •  RD$ {dup.get('total', 0):,.2f}  ({dup.get('mes', '')})\n\n"
                 f"Envía otra foto o usa el menú.",
                 parse_mode="Markdown",
             )
@@ -854,7 +887,7 @@ async def _process_photo(reply_to, context: ContextTypes.DEFAULT_TYPE, file_id: 
         InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
     ]])
     await reply_to.reply_text(
-        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
+        f"✅ *{md(nombre)}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -896,7 +929,7 @@ async def back_to_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         InlineKeyboardButton(f"📍 {loc}", callback_data=f"loc_{loc}") for loc in LOCATIONS
     ]])
     await query.edit_message_text(
-        f"✅ *{nombre}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
+        f"✅ *{md(nombre)}* — RD$ {total:,.2f}\n\n📍 ¿Dónde fue esta compra?",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -911,11 +944,17 @@ async def got_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     mode = context.user_data.get("mode", "single")
 
     if mode == "batch_photo":
+        n = len(context.user_data.get("batch_photo_ids") or [])
+        if n:  # álbum: las fotos ya llegaron antes de ubicación/categoría
+            prompt = (f"📷 *{n}* foto(s) recibida(s).\n"
+                      "Envía más o toca *✅ Finalizado*.")
+        else:
+            prompt = ("📷 Envíame *todas* las fotos del lote (una por una o en álbum).\n"
+                      "Cuando termines, toca *✅ Finalizado*.")
         m = await query.edit_message_text(
-            "📷 Envíame *todas* las fotos del lote (una por una o en álbum).\n"
-            "Cuando termines, toca *✅ Finalizado*.",
+            prompt,
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Finalizado (0)", callback_data="batch_done")]]),
+                InlineKeyboardButton(f"✅ Finalizado ({n})", callback_data="batch_done")]]),
             parse_mode="Markdown",
         )
         context.user_data["batch_status_msg_id"] = m.message_id
@@ -995,7 +1034,7 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tg_label  = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
     saved_msg = (
         f"✅ *Factura #{fac_id} guardada*\n\n"
-        f"🏪 {data.get('nombre_proveedor','?')}\n"
+        f"🏪 {md(data.get('nombre_proveedor','?'))}\n"
         f"💰 RD$ {float(data.get('total_facturado',0)):,.2f}\n"
         f"🏷️ {tipo_gasto} — {tg_label}\n"
         f"📊 *{mes}* — {len(facturas)} facturas  •  RD$ {total_mes:,.2f}"
@@ -1092,9 +1131,10 @@ async def edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
                        "EFECTIVO | TARJETA_CREDITO | TARJETA_DEBITO\n"
                        "TRANSFERENCIA | CHEQUE | CREDITO")
 
+    valor_actual = str(current_values.get(field, "—")).replace("`", "'")
     await query.edit_message_text(
         f"✏️ *Corregir: {label}*\n\n"
-        f"Valor actual: `{current_values.get(field,'—')}`\n\n"
+        f"Valor actual: `{valor_actual}`\n\n"
         f"Escribe el nuevo valor:{metodo_hint}",
         parse_mode="Markdown",
     )
@@ -1144,7 +1184,8 @@ async def edit_value_received(update: Update, context: ContextTypes.DEFAULT_TYPE
             data["observaciones"] = new_val
     except ValueError:
         await update.message.reply_text(
-            f"⚠️ Valor inválido: `{new_val}`\nEscribe un número válido (sin símbolos).",
+            f"⚠️ Valor inválido: `{new_val.replace('`', chr(39))}`\n"
+            "Escribe un número válido (sin símbolos).",
             parse_mode="Markdown",
         )
         return S_EDIT_VALUE
@@ -1191,6 +1232,20 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if update.message:
         await update.message.reply_text("Operación cancelada. Usa /nueva para empezar.")
     return ConversationHandler.END
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Error handler global: registra la excepción y avisa al usuario, para
+    que un fallo (p.ej. un BadRequest de Telegram) nunca deje el bot mudo."""
+    log.error("Error no manejado procesando un update", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Algo salió mal procesando eso. Intenta de nuevo o escribe "
+                "/cancelar para reiniciar."
+            )
+        except Exception:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1241,24 +1296,43 @@ async def got_pdf_in_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return await _start_pdf(update.message, context, update.message.document.file_id)
 
 
-async def batch_collect_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Foto recibida en modo lote → acumular y actualizar el contador."""
-    if not is_allowed(update): return ConversationHandler.END
+def _batch_stage_state(context) -> int:
+    """Estado actual del armado del lote (las fotos re-entran por el entry
+    point y hay que devolver el estado en el que realmente estamos)."""
+    if context.user_data.get("batch_status_msg_id"):
+        return S_COLLECT
+    if context.user_data.get("location"):
+        return S_CATEGORY
+    return S_LOCATION
+
+
+async def _batch_append_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Acumula una foto en el lote en armado. Si el botón Finalizado ya está
+    visible, actualiza su contador; si aún se pregunta ubicación/categoría,
+    solo acumula y mantiene el estado."""
     ids = context.user_data.setdefault("batch_photo_ids", [])
     ids.append(update.message.photo[-1].file_id)
     n = len(ids)
-    try:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=context.user_data.get("batch_status_msg_id"),
-            text=f"📷 *{n}* foto(s) recibida(s).\nEnvía más o toca *✅ Finalizado*.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"✅ Finalizado ({n})", callback_data="batch_done")]]),
-            parse_mode="Markdown",
-        )
-    except Exception:
-        pass  # ediciones rápidas (álbum) pueden fallar; no es crítico
-    return S_COLLECT
+    msg_id = context.user_data.get("batch_status_msg_id")
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=msg_id,
+                text=f"📷 *{n}* foto(s) recibida(s).\nEnvía más o toca *✅ Finalizado*.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"✅ Finalizado ({n})", callback_data="batch_done")]]),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass  # ediciones rápidas (álbum) pueden fallar; no es crítico
+    return _batch_stage_state(context)
+
+
+async def batch_collect_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Foto recibida en modo lote → acumular y actualizar el contador."""
+    if not is_allowed(update): return ConversationHandler.END
+    return await _batch_append_photo(update, context)
 
 
 async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2036,9 +2110,15 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
 # MAIN
 # ──────────────────────────────────────────────────────────────
 
-def main():
-    init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+def build_application(bot=None) -> Application:
+    """Construye la Application con todos los handlers. `bot` permite inyectar
+    un Bot alterno (p.ej. uno falso en las pruebas offline)."""
+    builder = Application.builder()
+    if bot is not None:
+        builder.bot(bot)
+    else:
+        builder.token(BOT_TOKEN)
+    app = builder.build()
 
     # Puerta de contraseña: corre primero (grupo -1) en cada update.
     app.add_handler(TypeHandler(Update, auth_gate), group=-1)
@@ -2129,6 +2209,14 @@ def main():
     app.add_handler(CallbackQueryHandler(on_pick_resumen,   pattern="^res_"))
     app.add_handler(CallbackQueryHandler(on_pick_exportar,  pattern="^exp_"))
 
+    app.add_error_handler(on_error)
+
+    return app
+
+
+def main():
+    init_db()
+    app = build_application()
     log.info("Bot iniciado con flujo guiado.")
     app.run_polling(drop_pending_updates=True)
 
