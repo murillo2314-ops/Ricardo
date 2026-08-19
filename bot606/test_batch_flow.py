@@ -348,6 +348,55 @@ async def run():
         check("FERRE\\_MAX" in card,
               "la tarjeta de revisión escapa el nombre del proveedor")
 
+    # ── Escenario G: validaciones que atajan lo que la DGII rechaza ──────
+    print("\n— Escenario G: RNC, fechas imposibles y NCF repetido —")
+
+    # Dígito verificador del RNC. El caso real: '102060621' se coló como
+    # Bellón SAS en el 606 de julio y la DGII rechazó la línea; el bueno
+    # es '102000621'. Los dos tienen 9 dígitos, así que el largo no basta.
+    check(bot.rnc_valido("102000621"), "RNC bueno de Bellón pasa")
+    check(not bot.rnc_valido("102060621"), "RNC malo de Bellón NO pasa")
+    for r in ("131545157", "133311887", "131092659", "132859146"):
+        check(bot.rnc_valido(r), f"RNC real {r} pasa")
+    check(bot.rnc_valido("40212345678"), "cédula de 11 dígitos se da por buena")
+    check(not bot.rnc_valido("12345"), "RNC corto no pasa")
+
+    d = bot.validate_and_fix({"rnc": "102060621", "ncf": "E310001373766",
+                              "total_facturado": 616.86, "itbis": 94.10,
+                              "monto_sin_itbis": 522.76, "propina": 0})
+    check(any("dígito verificador" in w for w in d["_warnings"]),
+          "validate_and_fix advierte del RNC inválido")
+    check(d["_needs_review"], "y la deja marcada para revisar")
+
+    # Fechas que no existen en el calendario
+    check(bot.normalize_fecha("31/02/2026") == "", "31/02 se rechaza")
+    check(bot.normalize_fecha("31/04/2026") == "", "31/04 se rechaza")
+    check(bot.normalize_fecha("29/02/2026") == "", "29/02 en año no bisiesto se rechaza")
+    check(bot.normalize_fecha("29/02/2024") == "2024-02-29", "29/02 bisiesto sí pasa")
+    check(bot.normalize_fecha("15/07/2026") == "2026-07-15", "fecha normal pasa")
+
+    # El NCF repetido lo para la BASE, no solo el chequeo de aplicación
+    fac = {"rnc": "131545157", "ncf": "E310009999999", "nombre_proveedor": "PRUEBA",
+           "total_facturado": 100, "itbis": 0, "monto_sin_itbis": 100, "propina": 0}
+    id1 = bot.save_factura("2026-06", "Punta Cana", "Obra", dict(fac))
+    id2 = bot.save_factura("2026-06", "Punta Cana", "Obra", dict(fac))
+    check(id1 > 0, "la primera se guarda")
+    check(id2 == 0, "la segunda la rechaza el índice único (devuelve 0)")
+
+    # /pendientes: la advertencia se conserva; lo que la saca de la cola es
+    # que un humano la haya revisado (revisada_manual), no haberla aceptado.
+    con_adv = dict(fac, ncf="E310009999998", _needs_review=True,
+                   _warnings=["⚠ prueba"])
+    bot.save_factura("2026-06", "Punta Cana", "Obra", dict(con_adv), reviewed=False)
+    bot.save_factura("2026-06", "Punta Cana", "Obra",
+                     dict(con_adv, ncf="E310009999997"), reviewed=True)
+    fs = {f["ncf"]: f for f in bot.get_facturas("2026-06")}
+    check(fs["E310009999998"]["needs_review"] == 1,
+          "sin revisar: queda como pendiente")
+    check(fs["E310009999997"]["needs_review"] == 1
+          and fs["E310009999997"]["revisada_manual"] == 1,
+          "revisada: conserva la advertencia pero sale de la cola")
+
     await app.shutdown()
 
     print()

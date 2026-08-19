@@ -32,7 +32,7 @@ import logging
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import anthropic
@@ -217,51 +217,86 @@ def init_db():
             # 1 = un humano abrió y confirmó la factura → ya no cuenta como pendiente,
             # aunque tenga advertencias. Se usa para que "corregidas ≠ pendientes".
             conn.execute("ALTER TABLE facturas ADD COLUMN revisada_manual INTEGER DEFAULT 0")
+
+        # Un NCF identifica UN comprobante: no puede existir dos veces. El chequeo
+        # de check_duplicate_ncf() es de aplicación (un consejo); esto es la regla.
+        # Sin él, cualquier camino que se salte el chequeo —o una base que se
+        # reinicie y pierda memoria— mete el doble en silencio.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_facturas_ncf "
+                "ON facturas(ncf) WHERE ncf IS NOT NULL AND ncf != ''"
+            )
+        except sqlite3.IntegrityError:
+            # La base ya viene con duplicados: no se puede imponer la regla sin
+            # limpiarlos. El bot sigue funcionando con el chequeo de aplicación.
+            dups = conn.execute(
+                "SELECT ncf, COUNT(*) n FROM facturas "
+                "WHERE ncf IS NOT NULL AND ncf != '' "
+                "GROUP BY ncf HAVING n > 1"
+            ).fetchall()
+            log.warning(
+                "No se pudo crear el índice único de NCF: la base ya tiene %d "
+                "NCF duplicado(s) -> %s. Limpiarlos y reiniciar para activarlo.",
+                len(dups), ", ".join(f"{r[0]} (x{r[1]})" for r in dups[:10]),
+            )
         conn.commit()
 
 
 def save_factura(mes: str, location: str, category: str, data: dict,
                  usuario: str = "", tipo_gasto: str = "02",
                  reviewed: bool = False) -> int:
-    """Guarda la factura. Si `reviewed=True` (un humano la abrió y confirmó en su
-    tarjeta de revisión), queda marcada como revisada manual y NO cuenta como
-    pendiente aunque tenga advertencias — así 'corregidas ≠ pendientes'."""
-    needs_review = 0 if reviewed else (1 if data.get("_needs_review") else 0)
-    with get_db() as conn:
-        cur = conn.execute("""
-            INSERT INTO facturas
-              (mes, location, category, filename, rnc, ncf, nombre,
-               fecha_comp, fecha_pago, total, itbis, base, propina,
-               metodo, tipo_cf, observaciones, qr_verified,
-               nivel_confianza, advertencias, needs_review, raw_json, usuario,
-               tipo_gasto, revisada_manual)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            mes, location, category,
-            data.get("_filename", ""),
-            data.get("rnc", ""),
-            data.get("ncf", ""),
-            data.get("nombre_proveedor", ""),
-            data.get("fecha_comprobante", ""),
-            data.get("fecha_pago", ""),
-            float(data.get("total_facturado") or 0),
-            float(data.get("itbis") or 0),
-            float(data.get("monto_sin_itbis") or 0),
-            float(data.get("propina") or 0),
-            data.get("metodo_pago", ""),
-            data.get("tipo_comprobante", ""),
-            data.get("observaciones", ""),
-            1 if data.get("_qr_verified") else 0,
-            data.get("nivel_confianza", "ALTO"),
-            json.dumps(data.get("_warnings") or []),
-            needs_review,
-            json.dumps(data),
-            usuario,
-            tipo_gasto,
-            1 if reviewed else 0,
-        ))
-        conn.commit()
-        return cur.lastrowid
+    """Guarda la factura y devuelve su id, o **0 si el NCF ya existía**.
+
+    Si `reviewed=True` (un humano la abrió y confirmó en su tarjeta de revisión),
+    queda marcada como revisada manual y NO cuenta como pendiente aunque tenga
+    advertencias — así 'corregidas ≠ pendientes'."""
+    # La advertencia NO se borra por haberla mirado: se conserva y la
+    # distinción "ya la revisó un humano" la lleva revisada_manual. Antes se
+    # ponía en 0 al aceptar desde la tarjeta y /pendientes quedaba vacío para
+    # siempre, que era justo la red de seguridad que hacía falta.
+    needs_review = 1 if data.get("_needs_review") else 0
+    try:
+        with get_db() as conn:
+            cur = conn.execute("""
+                INSERT INTO facturas
+                  (mes, location, category, filename, rnc, ncf, nombre,
+                   fecha_comp, fecha_pago, total, itbis, base, propina,
+                   metodo, tipo_cf, observaciones, qr_verified,
+                   nivel_confianza, advertencias, needs_review, raw_json, usuario,
+                   tipo_gasto, revisada_manual)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                mes, location, category,
+                data.get("_filename", ""),
+                data.get("rnc", ""),
+                data.get("ncf", ""),
+                data.get("nombre_proveedor", ""),
+                data.get("fecha_comprobante", ""),
+                data.get("fecha_pago", ""),
+                float(data.get("total_facturado") or 0),
+                float(data.get("itbis") or 0),
+                float(data.get("monto_sin_itbis") or 0),
+                float(data.get("propina") or 0),
+                data.get("metodo_pago", ""),
+                data.get("tipo_comprobante", ""),
+                data.get("observaciones", ""),
+                1 if data.get("_qr_verified") else 0,
+                data.get("nivel_confianza", "ALTO"),
+                json.dumps(data.get("_warnings") or []),
+                needs_review,
+                json.dumps(data),
+                usuario,
+                tipo_gasto,
+                1 if reviewed else 0,
+            ))
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.IntegrityError:
+        # El índice único paró un NCF repetido. No es un fallo del bot: es la
+        # base haciendo su trabajo. Devolvemos 0 y quien llame avisa bonito.
+        log.warning("NCF duplicado rechazado por la base: %s", data.get("ncf"))
+        return 0
 
 
 def get_facturas(mes: str) -> list[dict]:
@@ -411,6 +446,28 @@ def parse_ecf_url(qr_text: str) -> dict | None:
     return None
 
 
+def rnc_valido(rnc: str) -> bool:
+    """Dígito verificador de la DGII para RNC de 9 dígitos.
+
+    Un RNC mal leído casi siempre falla esta cuenta (solo 1 de cada 11 errores
+    la pasa por casualidad), así que ataja el dedazo en el teléfono en vez de
+    un mes después, cuando la DGII rechaza el 606. Caso real: '102060621' se
+    coló como Bellón SAS — el bueno es '102000621'.
+
+    Las cédulas (11 dígitos) usan otro algoritmo y aquí se dan por buenas.
+    """
+    rnc = re.sub(r"\D", "", str(rnc or ""))
+    if len(rnc) == 11:
+        return True
+    if len(rnc) != 9:
+        return False
+    pesos = (7, 9, 8, 6, 5, 4, 3, 2)
+    suma = sum(int(d) * p for d, p in zip(rnc[:8], pesos))
+    resto = suma % 11
+    esperado = 2 if resto == 0 else (1 if resto == 1 else 11 - resto)
+    return esperado == int(rnc[8])
+
+
 def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
     if data.get("_error"):
         data["_needs_review"] = True
@@ -451,6 +508,8 @@ def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
     rnc = re.sub(r"\D", "", str(data.get("rnc") or ""))
     if len(rnc) not in (9, 11):
         warns.append(f"⚠ RNC '{rnc}' tiene {len(rnc)} dígitos (esperado 9 u 11)")
+    elif not rnc_valido(rnc):
+        warns.append(f"⚠ RNC {rnc} no pasa el dígito verificador de la DGII — revisar")
 
     ncf = clean_ncf(data.get("ncf"))
     data["ncf"] = ncf  # guardar sin guiones ni espacios
@@ -467,7 +526,9 @@ def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
             if iso:
                 data[k] = iso
             elif k == "fecha_comprobante":
-                warns.append(f"⚠ Fecha '{raw}' no legible — caería al mes actual")
+                # md(): 'raw' viene del modelo y puede traer _ o *; sin escapar
+                # rompía el Markdown de la tarjeta y el flujo quedaba trabado.
+                warns.append(f"⚠ Fecha '{md(str(raw))}' no legible — caería al mes actual")
 
     if (data.get("nivel_confianza") or "").upper() == "BAJO":
         warns.append("⚠ Imagen poco legible — verificar")
@@ -478,7 +539,11 @@ def validate_and_fix(data: dict, qr: dict | None = None) -> dict:
 
 
 async def extract_invoice(image_bytes: bytes, filename: str) -> dict:
-    qr_raw = decode_qr(image_bytes)
+    # decode_qr es CPU pura (pyzbar + OpenCV reescalando a 1x/2x/3x). Corriéndolo
+    # aquí mismo bloqueaba el event loop una vez por factura: en un lote de 40 el
+    # bot dejaba de responder varios minutos y el usuario, viéndolo mudo, reenviaba
+    # las fotos. Fuera del loop, el lote de verdad avanza en paralelo.
+    qr_raw = await asyncio.to_thread(decode_qr, image_bytes)
     qr     = parse_ecf_url(qr_raw) if qr_raw else None
 
     hint = ""
@@ -740,10 +805,14 @@ def normalize_fecha(s) -> str:
         d, mo, y = m.groups()
         if len(y) == 2:
             y = "20" + y
-    d, mo = int(d), int(mo)
-    if not (1 <= mo <= 12 and 1 <= d <= 31):
+    # Fecha REAL del calendario, no solo rangos: '31/02/2026' no existe y antes
+    # pasaba como '2026-02-31', decidía el mes de la factura y se escribia tal
+    # cual en el 606, donde la DGII lo rechaza.
+    try:
+        datetime(int(y), int(mo), int(d))
+    except ValueError:
         return ""
-    return f"{y}-{mo:02d}-{d:02d}"
+    return f"{int(y)}-{int(mo):02d}-{int(d):02d}"
 
 
 def fecha_display(iso) -> str:
@@ -821,7 +890,7 @@ def _CLEANUP(context):
                 # lote:
                 "mode", "batch_photo_ids", "batch_pdf_file_id", "batch_items",
                 "batch_report", "batch_months", "batch_index",
-                "batch_status_msg_id"):
+                "batch_status_msg_id", "batch_truncado"):
         context.user_data.pop(key, None)
 
 
@@ -859,6 +928,16 @@ async def start_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if (msg and msg.photo and context.user_data.get("mode") == "batch_photo"
             and "batch_items" not in context.user_data):
         return await _batch_append_photo(update, context)
+    # Con la lista del lote ya en pantalla, la guarda de arriba no aplica y la
+    # foto caía en _CLEANUP: se llevaba por delante las facturas sin decidir y,
+    # de paso, la subida a Drive de las ya aceptadas. Ahora avisa y no toca nada.
+    if msg and msg.photo and context.user_data.get("batch_items"):
+        await msg.reply_text(
+            "📋 Tienes un lote a medias en pantalla.\n\n"
+            "Termínalo con 🏁 *Terminar* y después me mandas esa foto.",
+            parse_mode="Markdown",
+        )
+        return S_BATCH_LIST
     _CLEANUP(context)
     if msg and msg.photo:
         if msg.media_group_id:
@@ -1062,6 +1141,17 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # El usuario vio la tarjeta de revisión y aceptó → revisada manual (no pendiente).
     fac_id = save_factura(mes, location, category, data, user_label(update),
                           tipo_gasto, reviewed=True)
+    if not fac_id:
+        # NCF repetido. Para el usuario esto NO es un error: es que ya estaba
+        # hecha. Se lo decimos en positivo para que no la vuelva a mandar.
+        _CLEANUP(context)
+        await query.edit_message_text(
+            f"👍 Esa factura ya estaba guardada — no se duplicó.\n\n"
+            f"NCF `{md(data.get('ncf') or '?')}`\n\n"
+            f"Puedes seguir con la siguiente.",
+            parse_mode="Markdown",
+        )
+        return S_PHOTO
 
     facturas  = get_facturas(mes)
     total_mes = sum(f["total"] for f in facturas)
@@ -1113,7 +1203,7 @@ async def fin_lote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        query.message.text + "\n\n_Usa Resumen o Descargar Excel para ver los datos._",
+        query.message.text + "\n\n" + _despedida(context),
         parse_mode="Markdown",
         disable_web_page_preview=True,
     )
@@ -1289,15 +1379,60 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+def _despedida(context) -> str:
+    """Cierre con el conteo del mes. Que la última pantalla diga qué quedó
+    guardado, no cómo bajar un Excel: quien acabó de mandar fotos lo que
+    necesita saber es que ya puede guardar el teléfono."""
+    mes = get_mes(context)
+    try:
+        facturas = get_facturas(mes)
+    except Exception:
+        facturas = []
+    if not facturas:
+        return "👋 Listo. Cuando quieras, mándame una foto de la factura."
+    total = sum(f["total"] for f in facturas)
+    return (f"👋 Listo, quedamos aquí.\n\n"
+            f"📊 En *{mes}* llevas *{len(facturas)} factura(s)* — "
+            f"RD$ {total:,.2f}\n\n"
+            f"Mándame otra foto cuando quieras seguir.")
+
+
+async def conv_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Se acabó el tiempo de la conversación: cerrar y despedirse.
+
+    Antes no existía `conversation_timeout`, así que una captura a medias se
+    quedaba abierta indefinidamente y el bot nunca decía que había terminado."""
+    _CLEANUP(context)
+    chat = update.effective_chat if isinstance(update, Update) else None
+    if chat:
+        try:
+            await context.bot.send_message(
+                chat.id, _despedida(context), parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    return ConversationHandler.END
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Error handler global: registra la excepción y avisa al usuario, para
-    que un fallo (p.ej. un BadRequest de Telegram) nunca deje el bot mudo."""
+    """Error handler global: registra la excepción, limpia el estado a medias y
+    avisa al usuario.
+
+    Antes solo avisaba: el lote o la factura a medias quedaban en user_data y el
+    usuario seguía atrapado en el mismo paso roto, con la única salida de escribir
+    /cancelar — justo el tipo de comando que este bot existe para no tener que
+    usar. Limpiando aquí, y con allow_reentry, la siguiente foto arranca limpia."""
     log.error("Error no manejado procesando un update", exc_info=context.error)
+    try:
+        if context.user_data is not None:
+            _CLEANUP(context)
+    except Exception:
+        pass
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "⚠️ Algo salió mal procesando eso. Intenta de nuevo o escribe "
-                "/cancelar para reiniciar."
+                "⚠️ Algo salió mal con eso y lo dejé aquí.\n\n"
+                "Mándame la foto otra vez y seguimos."
             )
         except Exception:
             pass
@@ -1428,6 +1563,12 @@ async def _run_pdf_batch(status_msg, context: ContextTypes.DEFAULT_TYPE) -> int:
         await status_msg.edit_text("❌ El PDF no tiene páginas legibles.")
         _CLEANUP(context)
         return ConversationHandler.END
+    # El rasterizado corta en 40 páginas por seguridad. Si llegó justo al tope,
+    # es probable que el PDF traiga más y antes se perdían sin avisar: el usuario
+    # leía "40 facturas leídas" y daba por capturado el archivo completo.
+    if len(pages) >= 40:
+        context.user_data["batch_truncado"] = len(pages)
+
     images = [(pg, f"pdf_p{i+1}.jpg") for i, pg in enumerate(pages)]
     await _process_batch_images(images, context, status_msg)
     return await _show_batch_list(status_msg, context)
@@ -1490,6 +1631,9 @@ def _batch_list_text(context) -> str:
     if rep.get("unreadable"): extra.append(f"📄 {rep['unreadable']} ilegible(s)")
     if extra:
         lines.append("(" + " · ".join(extra) + " omitidas)")
+    if context.user_data.get("batch_truncado"):
+        lines.append(f"⚠️ Tope de {context.user_data['batch_truncado']} páginas: "
+                     "si el PDF tenía más, esas NO entraron. Mándalas aparte.")
     lines.append("⚠️ = el bot sugiere revisar\n")
     for i, it in enumerate(items, 1):
         d = it["data"]
@@ -1563,6 +1707,13 @@ def _save_batch_item(context, update, it, reviewed: bool) -> int:
     tg  = it.get("tipo_gasto", "02")
     fac_id = save_factura(mes, location, category, data,
                           user_label(update), tg, reviewed=reviewed)
+    if not fac_id:
+        # La base rechazó el NCF repetido: no se guardó, así que no se cuenta
+        # como aceptada ni se toca el mes para la subida a Drive.
+        it["status"] = "duplicada"
+        rep = context.user_data.setdefault("batch_report", {})
+        rep["dups"] = rep.get("dups", 0) + 1
+        return 0
     context.user_data.setdefault("batch_months", set()).add(mes)
     it["status"] = "accepted"
     it["saved_id"] = fac_id
@@ -1782,7 +1933,8 @@ async def _render_resumen(reply_to, mes: str, filtro: str = "ALL"):
         )
         return
 
-    rev  = sum(1 for f in facturas if f.get("needs_review"))
+    rev  = sum(1 for f in facturas
+               if f.get("needs_review") and not f.get("revisada_manual"))
     qr_v = sum(1 for f in facturas if f.get("qr_verified"))
     header = (
         f"📊 *Resumen {mes}{filtro_label}*\n"
@@ -1809,7 +1961,7 @@ async def _render_resumen(reply_to, mes: str, filtro: str = "ALL"):
         metodo = METODO_LABELS.get((f.get("metodo") or "").upper(), f.get("metodo") or "—")
         tg     = f.get("tipo_gasto") or ""
         tg_txt = (f"  🏷️ {tg} — {TIPO_GASTO_DICT.get(tg,'')}\n") if tg else ""
-        adv    = "⚠️ " if f.get("needs_review") else ""
+        adv    = "⚠️ " if (f.get("needs_review") and not f.get("revisada_manual")) else ""
         qr     = "✅ " if f.get("qr_verified")  else ""
 
         line = (
@@ -1901,7 +2053,7 @@ async def cmd_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"📋 *{mes}* — {len(facturas)} facturas\n"]
     for i, f in enumerate(facturas, 1):
         qr  = "✓" if f["qr_verified"] else " "
-        rev = "⚠" if f["needs_review"] else " "
+        rev = "⚠" if (f["needs_review"] and not f.get("revisada_manual")) else " "
         nombre = (f["nombre"] or f["filename"] or "?")[:22]
         loc = (f.get("location") or "")[:2]
         cat = (f.get("category") or "")[:1]
@@ -1916,7 +2068,8 @@ async def cmd_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     mes = get_mes(context)
-    facturas = [f for f in get_facturas(mes) if f["needs_review"]]
+    facturas = [f for f in get_facturas(mes)
+                if f["needs_review"] and not f.get("revisada_manual")]
     if not facturas:
         await update.message.reply_text("✅ Sin advertencias pendientes.")
         return
@@ -2024,7 +2177,8 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
 
     ws.merge_cells("A2:V2")
     c = ws["A2"]
-    rev = sum(1 for f in facturas if f.get("needs_review"))
+    rev = sum(1 for f in facturas
+              if f.get("needs_review") and not f.get("revisada_manual"))
     c.value = (f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}  |  "
                f"Facturas: {len(facturas)}  |  Revisión pendiente: {rev}")
     c.font = Font(name="Calibri", italic=True, color="FFFFFF", size=9)
@@ -2084,7 +2238,7 @@ def build_excel(facturas: list[dict], mes: str) -> bytes:
     for seq, fac in enumerate(facturas, 1):
         row = seq + 3
         is_qr   = bool(fac.get("qr_verified"))
-        needs   = bool(fac.get("needs_review"))
+        needs   = bool(fac.get("needs_review")) and not fac.get("revisada_manual")
 
         if is_qr:   rf = fill("E2EFDA")
         elif needs: rf = fill("FFF2CC")
@@ -2231,6 +2385,10 @@ def build_application(bot=None) -> Application:
             S_EDIT_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value_received),
             ],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, conv_timeout),
+                CallbackQueryHandler(conv_timeout),
+            ],
         },
         fallbacks=[
             CommandHandler("cancelar", conv_cancel),
@@ -2239,6 +2397,10 @@ def build_application(bot=None) -> Application:
         allow_reentry=True,
         per_user=True,
         per_chat=True,
+        # Sin esto una conversación NO se cerraba nunca: quien guardaba una
+        # factura y se iba quedaba en S_PHOTO para siempre, sin despedida y sin
+        # saber si el bot había terminado. Ahora se cierra sola y avisa.
+        conversation_timeout=timedelta(minutes=20),
     )
 
     app.add_handler(conv)
