@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Presupuesto — Inversiones ROMUR</title>
+<style>
+  @page { size: Letter; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 216mm; height: 279mm;
+    font-family: 'Liberation Sans', Arial, sans-serif;
+    color: #000; font-size: 9.3pt;
+    padding: 13mm 15mm 10mm 15mm;
+    position: relative;
+  }
+
+  .hdr { position: relative; margin-bottom: 2mm; }
+  .hdr .logo { position: absolute; left: 0; top: 0; width: 25mm; }
+  .hdr .logo img { width: 100%; }
+  .hdr .c { text-align: center; }
+  .hdr .c .name { font-size: 16.5pt; font-weight: 700; }
+  .hdr .c .rnc { font-size: 9.5pt; margin-top: 1.2mm; }
+  .hdr .c .tit { font-size: 14.5pt; font-weight: 700; text-decoration: underline; margin-top: 4mm; letter-spacing: .5px; }
+  .hdr .r { position: absolute; right: 0; top: 9mm; text-align: left; font-size: 9.8pt; font-weight: 700; }
+  .hdr .r div { margin-bottom: 3.5mm; }
+
+  .obra { margin-top: 4mm; font-size: 9.5pt; }
+  .obra .lbl { font-weight: 700; text-decoration: underline; }
+  .obra .val { margin-top: 1.2mm; }
+  .prop { margin-top: 2.6mm; font-family: 'Liberation Serif', 'Times New Roman', serif;
+    font-weight: 700; font-size: 10pt; margin-bottom: 2.6mm; line-height: 1.4; }
+
+  table.p { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  table.p col.c-no { width: 8%; }
+  table.p col.c-part { width: 44%; }
+  table.p col.c-cant { width: 10.5%; }
+  table.p col.c-und { width: 8%; }
+  table.p col.c-pu { width: 14.5%; }
+  table.p col.c-tot { width: 15%; }
+  table.p th { border: 1px solid #000; font-size: 8.8pt; font-weight: 700; padding: 2.2mm 1.5mm; text-align: center; }
+  td.body-cell { border-left: 1px solid #000; border-right: 1px solid #000; vertical-align: top; padding: 0; }
+
+  .body-grid { display: flex; height: 132mm; }
+  .body-grid .g-no { flex: 0 0 8%; border-right: 1px solid #000; padding-top: 8mm; text-align: center; font-weight: 700; }
+  .body-grid .g-part { flex: 0 0 44%; border-right: 1px solid #000; padding: 8mm 2mm 0 2.5mm; }
+  .body-grid .g-cant { flex: 0 0 10.5%; padding-top: 8mm; text-align: center; }
+  .body-grid .g-und { flex: 0 0 8%; padding-top: 8mm; text-align: center; }
+  .body-grid .g-pu { flex: 0 0 14.5%; padding-top: 8mm; text-align: right; padding-right: 2mm; }
+  .body-grid .g-tot { flex: 1; padding-top: 8mm; text-align: right; padding-right: 2mm; }
+  .rowline { line-height: 1.35; margin-bottom: 4.5mm; }
+
+  table.t { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9.3pt; }
+  table.t td { padding: 1.4mm 2mm; }
+  table.t col.t-lbl { width: 62.5%; }
+  table.t col.t-pct { width: 14.5%; }
+  table.t col.t-val { width: 15%; }
+  table.t col.t-sp { width: 8%; }
+  .lbl-r { text-align: right; }
+  .pct-r { text-align: right; }
+  .val-r { text-align: right; border: 1px solid #000; }
+  .noborder { border: none !important; }
+  .bold { font-weight: 700; }
+  .topline td { border-top: 1px solid #000; }
+
+  .foot { position: absolute; bottom: 8mm; left: 0; right: 0; text-align: center; font-size: 7.6pt; }
+  .foot div { margin-bottom: 1mm; }
+</style>
+</head>
+<body>
+
+  <div class="hdr">
+    <div class="logo"><img src="logo_p2_X15.png" alt="Inversiones ROMUR"></div>
+    <div class="c">
+      <div class="name">INVERSIONES ROMUR, S.R.L.</div>
+      <div class="rnc">RNC: 1-31-54515-7</div>
+      <div class="tit">PRESUPUESTO</div>
+    </div>
+    <div class="r">
+      <div>Pg. Nº:&nbsp; 1</div>
+      <div>Fecha: 13/07/2026</div>
+    </div>
+  </div>
+
+  <div class="obra">
+    <span class="lbl">Obra:</span>
+    <div class="val">SUMINISTRO DE AGARRES PARA POLEAS</div>
+  </div>
+  <div class="prop">Propietario:&nbsp;&nbsp; FIDEICOMISO FILANTROPICO DE LOS JUEGOS CENTROAMERICANOS Y DEL CARIBE SANTO DOMINGO 2026 &nbsp;RNC: 1-32-68227-2</div>
+
+  <table class="p">
+    <colgroup>
+      <col class="c-no"><col class="c-part"><col class="c-cant"><col class="c-und"><col class="c-pu"><col class="c-tot">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Nº</th>
+        <th>PARTIDAS</th>
+        <th>CANTIDAD</th>
+        <th>UNIDAD</th>
+        <th>PRECIO<br>UNITARIO</th>
+        <th>TOTAL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="body-cell" colspan="6">
+          <div class="body-grid">
+            <div class="g-no"><div class="rowline">1</div></div>
+            <div class="g-part"><div class="rowline">SUMINISTRO DE JUEGOS DE AGARRES PARA POLEAS, PARA EJERCICIOS DE ESPALDA</div></div>
+            <div class="g-cant"><div class="rowline">2.00</div></div>
+            <div class="g-und"><div class="rowline">UND</div></div>
+            <div class="g-pu"><div class="rowline">38.320,00</div></div>
+            <div class="g-tot"><div class="rowline">76,640.00</div></div>
+          </div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <table class="t">
+    <colgroup><col class="t-lbl"><col class="t-pct"><col class="t-val"><col class="t-sp"></colgroup>
+    <tr class="topline">
+      <td class="lbl-r bold">SUB-TOTAL PRESUPUESTO (DOP):</td>
+      <td></td>
+      <td class="val-r bold">76,640.00</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td class="lbl-r bold" style="padding-top:2.5mm">GASTOS INDIRECTOS:</td>
+      <td></td><td class="noborder"></td><td></td>
+    </tr>
+    <tr>
+      <td class="lbl-r">ITBIS (18% del 10% del total de Directos más Indirectos):</td>
+      <td class="pct-r">18.00 %</td>
+      <td class="val-r">1,379.52</td>
+      <td></td>
+    </tr>
+    <tr class="topline">
+      <td class="lbl-r bold">TOTAL INDIRECTOS (DOP):</td>
+      <td></td>
+      <td class="val-r bold">1,379.52</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td class="lbl-r bold" style="padding-top:3mm">TOTAL PRESUPUESTO (DOP):</td>
+      <td></td>
+      <td class="val-r bold" style="margin-top:3mm">78,019.52</td>
+      <td></td>
+    </tr>
+  </table>
+
+  <div class="foot">
+    <div>DIRECCIÓN: Calle Melvin Jones # 158 Geanlin V 4B, La esperilla DN, Santo Domingo</div>
+    <div>TELEFONO: +1 (829) 727-8563 &nbsp;&nbsp;&nbsp;Email: inversionesromursrl@gmail.com</div>
+  </div>
+
+</body>
+</html>

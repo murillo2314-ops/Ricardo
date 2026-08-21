@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Cotización — Inversiones ROMUR</title>
+<style>
+  @font-face { font-family: 'Selawik'; src: url('selawk.ttf'); font-weight: 400; }
+  @font-face { font-family: 'Selawik'; src: url('selawksb.ttf'); font-weight: 600; }
+  @font-face { font-family: 'Selawik'; src: url('selawkb.ttf'); font-weight: 700; }
+  @font-face { font-family: 'OpenSansXB'; src: url('OpenSans-ExtraBold.ttf'); font-weight: 800; }
+  @page { size: A4; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --navy: #0A2A5E;
+    --navy-dark: #081F3F;
+    --navy-deco: #123163;
+    --orange: #C8642A;
+    --row-light: #F2F6FB;
+    --peach: #FBEFE3;
+    --gray: #222222;
+    --sku: #B0B8C5;
+    --line: #E2E8F1;
+    --cover-desc: #A3B1C7;
+    --cover-label: #6E82A1;
+  }
+  body { font-family: 'Selawik', 'Segoe UI', sans-serif; color: var(--gray); font-size: 10pt; }
+  .page { width: 210mm; height: 297mm; position: relative; overflow: hidden; page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+
+  /* ============ PAGE 1 — PORTADA ============ */
+  .cover { background: var(--navy); }
+  .cover .tri-tl { position: absolute; top: 0; left: 0; width: 34mm; height: 22mm;
+    background: var(--orange); clip-path: polygon(0 0, 100% 0, 0 100%); }
+  .cover .tri-br { position: absolute; bottom: 12mm; right: 0; width: 30mm; height: 26mm;
+    background: var(--orange); clip-path: polygon(100% 0, 100% 100%, 0 100%); }
+  .cover .circle { position: absolute; top: 74mm; right: -14mm; width: 56mm; height: 56mm;
+    border: 1.2mm solid var(--navy-deco); border-radius: 50%; }
+  .cover .circle2 { position: absolute; top: 8mm; left: 58mm; width: 26mm; height: 26mm;
+    border: 1mm solid var(--navy-deco); border-radius: 50%; }
+  .cover .diamond1 { position: absolute; bottom: 40mm; right: 30mm; width: 68mm; height: 68mm;
+    background: var(--navy-deco); transform: rotate(45deg); opacity: .55; }
+  .cover .diamond2 { position: absolute; bottom: -18mm; right: 68mm; width: 46mm; height: 46mm;
+    background: var(--navy-deco); transform: rotate(45deg); opacity: .4; }
+  .cover .logo-card { position: absolute; top: 29mm; left: 34mm; width: 46mm; height: 40mm;
+    background: #fff; border-radius: 4.5mm; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3mm 8mm rgba(0,0,0,.25); }
+  .cover .logo-card img { width: 36mm; }
+  .cover .eyebrow { position: absolute; top: 119mm; left: 34mm; color: var(--orange);
+    font-weight: 700; font-size: 9.5pt; letter-spacing: 5px; }
+  .cover .title { position: absolute; top: 127mm; left: 34mm; color: #fff;
+    font-family: 'OpenSansXB', 'Selawik', sans-serif; font-weight: 800;
+    font-size: 27pt; line-height: 1.18; }
+  .cover .bar { position: absolute; top: 160mm; left: 34mm; width: 21mm; height: 1.6mm; background: var(--orange); }
+  .cover .desc { position: absolute; top: 169mm; left: 34mm; width: 122mm;
+    color: var(--cover-desc); font-size: 10.5pt; line-height: 1.6; }
+  .cover .facts { position: absolute; top: 200mm; left: 34mm; display: flex; gap: 15mm; }
+  .cover .facts .f .k { color: var(--cover-label); font-size: 7.5pt; letter-spacing: 3px; margin-bottom: 2.4mm; }
+  .cover .facts .f .v { color: #fff; font-weight: 700; font-size: 12pt; }
+  .cover .cfooter { position: absolute; bottom: 0; left: 0; right: 0; height: 12mm;
+    background: var(--navy-dark); display: flex; align-items: center; justify-content: space-between;
+    padding: 0 12mm; font-size: 8pt; color: #8fa0bd; }
+  .cover .cfooter b { color: #fff; }
+
+  /* ============ PAGE 2 — COTIZACIÓN ============ */
+  .quote { padding: 11mm 14mm 22mm 14mm; }
+  .header { display: flex; align-items: flex-start; margin-bottom: 6.5mm; }
+  .header .logo { width: 24mm; flex: 0 0 24mm; }
+  .header .logo img { width: 100%; }
+  .header .center { flex: 1; text-align: center; padding-top: 1.5mm; }
+  .header .center h1 { font-size: 17.5pt; font-weight: 700; color: var(--navy); letter-spacing: .3px; }
+  .header .center .rnc { font-size: 9.5pt; color: #555; margin-top: 1.6mm; }
+  .header .center .band { display: inline-block; background: var(--navy); color: #fff;
+    font-size: 8.5pt; font-weight: 700; letter-spacing: 4px; padding: 2.2mm 7mm; margin-top: 3.2mm; }
+  .header .meta { flex: 0 0 34mm; text-align: right; font-size: 9pt; padding-top: 1mm; }
+  .header .meta div { margin-bottom: 1.2mm; }
+  .header .meta b { color: var(--navy); }
+
+  .info { display: flex; gap: 8mm; margin-bottom: 6mm; font-size: 9.5pt; }
+  .info .col { line-height: 1.55; }
+  .info .col.left { flex: 1.5; }
+  .info .col.right { flex: 1; }
+  .info b { color: var(--navy); }
+
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 6mm; }
+  table.items thead th { background: var(--navy); color: #fff; font-size: 7.6pt; font-weight: 700;
+    letter-spacing: 2px; padding: 3.2mm 2.5mm; text-align: center; }
+  table.items thead th.desc { text-align: left; padding-left: 5mm; }
+  table.items thead th.num { text-align: right; padding-right: 4mm; }
+  table.items tbody td { padding: 4.5mm 2.5mm; font-size: 9.5pt; vertical-align: middle;
+    border-bottom: 1px solid var(--line); text-align: center; }
+  table.items tbody td.no { width: 9mm; color: #444; }
+  table.items tbody td.desc { text-align: left; padding-left: 5mm; width: 72mm; }
+  table.items tbody td.desc .name { font-weight: 700; color: var(--navy); font-size: 9.8pt; }
+  table.items tbody td.desc .sub { color: var(--sku); font-size: 7.4pt; letter-spacing: 2px; margin-top: 1.4mm; }
+  table.items tbody td.num { text-align: right; padding-right: 4mm; }
+
+  .photo-card { border: 1px solid var(--line); border-radius: 2.5mm; overflow: hidden;
+    margin-bottom: 8mm; display: flex; }
+  .photo-card .label { flex: 1; background: var(--row-light); padding: 6mm;
+    display: flex; flex-direction: column; justify-content: center; }
+  .photo-card .label .tag { color: var(--navy); font-weight: 700; font-size: 8.5pt;
+    letter-spacing: 3px; margin-bottom: 3.5mm; }
+  .photo-card .label p { font-size: 9pt; color: #555; line-height: 1.55; }
+  .photo-card .img { flex: 0 0 58mm; background: #fff; display: flex; align-items: center;
+    justify-content: center; padding: 4mm; border-left: 1px solid var(--line); }
+  .photo-card .img img { max-height: 58mm; max-width: 100%; }
+
+  .total-row { display: flex; justify-content: flex-end; margin-bottom: 6mm; }
+  .total-pill { background: var(--orange); color: #fff; border-radius: 2.5mm;
+    padding: 4.5mm 9mm; display: flex; align-items: center; gap: 12mm; }
+  .total-pill .lbl { font-weight: 700; font-size: 10.5pt; letter-spacing: 1.5px; }
+  .total-pill .amt { font-weight: 700; font-size: 12.5pt; }
+
+  .note { display: flex; align-items: center; gap: 2.5mm; font-size: 8.5pt; color: #667; }
+  .note .sq { width: 2mm; height: 3.5mm; background: var(--orange); flex: 0 0 2mm; }
+
+  .pfooter { position: absolute; left: 0; right: 0; bottom: 0; }
+  .pfooter .strip { height: 5mm; background: var(--navy); }
+
+  /* ============ PAGE 3 — CONDICIONES ============ */
+  .cond { padding: 13mm 14mm 22mm 14mm; }
+  .cond h2 { color: var(--navy); font-size: 12.5pt; font-weight: 700; letter-spacing: 4px;
+    padding-bottom: 3.5mm; border-bottom: .8mm solid var(--navy); margin-bottom: 9mm; }
+  .warranty { background: var(--peach); border-radius: 3mm; position: relative;
+    padding: 8mm 9mm 8mm 11mm; margin-bottom: 10mm; overflow: hidden; }
+  .warranty .obar { position: absolute; left: 0; top: 0; bottom: 0; width: 2.2mm; background: var(--orange); }
+  .warranty h3 { color: var(--orange); font-size: 9.5pt; font-weight: 700; letter-spacing: 3px; margin-bottom: 4.5mm; }
+  .warranty p { font-size: 9.3pt; color: #3a3a3a; line-height: 1.7; }
+
+  .bank { border: 1px solid var(--line); border-radius: 2.5mm; overflow: hidden; margin-bottom: 8mm; }
+  .bank .bank-head { background: var(--navy); color: #fff; font-weight: 700; font-size: 9pt;
+    letter-spacing: 3px; padding: 4mm 7mm; }
+  .bank .grid { display: grid; grid-template-columns: 1fr 1fr; }
+  .bank .cell { padding: 3.8mm 7mm; border-bottom: 1px solid var(--line); }
+  .bank .cell:nth-child(odd) { border-right: 1px solid var(--line); }
+  .bank .cell.full { grid-column: 1 / -1; border-right: none; border-bottom: none; }
+  .bank .k { color: var(--sku); font-size: 7.4pt; letter-spacing: 2px; margin-bottom: 1.4mm; }
+  .bank .v { font-weight: 700; color: #1a1a1a; font-size: 10pt; }
+
+  .thanks { font-size: 9.3pt; color: #444; margin-bottom: 10mm; }
+  .cfoot-line { border-top: 1px solid var(--line); padding-top: 4mm; text-align: center;
+    font-size: 7.8pt; color: #9aa3ae; }
+</style>
+</head>
+<body>
+
+  <!-- ================= PORTADA ================= -->
+  <div class="page cover">
+    <div class="diamond1"></div>
+    <div class="diamond2"></div>
+    <div class="circle"></div>
+    <div class="circle2"></div>
+    <div class="tri-tl"></div>
+    <div class="tri-br"></div>
+    <div class="logo-card"><img src="logo_p2_X15.png" alt="Inversiones ROMUR"></div>
+    <div class="eyebrow">COTIZACIÓN&nbsp;&nbsp;·&nbsp;&nbsp;INVERSIONES ROMUR</div>
+    <div class="title">Agarres<br>para poleas</div>
+    <div class="bar"></div>
+    <div class="desc">Suministro de juegos de agarres para poleas — accesorios para máquinas
+      de cable, principalmente para ejercicios de espalda.</div>
+    <div class="facts">
+      <div class="f"><div class="k">FECHA</div><div class="v">13/07/2026</div></div>
+      <div class="f"><div class="k">VALIDEZ</div><div class="v">30 días</div></div>
+      <div class="f"><div class="k">MONEDA</div><div class="v">DOP (RD$)</div></div>
+    </div>
+    <div class="cfooter">
+      <div><b>INVERSIONES ROMUR, S.R.L.</b> · RNC 1-31-54515-7</div>
+      <div>(809) 645-0075 · r.murillo@inversionesromur.com</div>
+    </div>
+  </div>
+
+  <!-- ================= COTIZACIÓN ================= -->
+  <div class="page quote">
+    <div class="header">
+      <div class="logo"><img src="logo_p2_X15.png" alt="Inversiones ROMUR"></div>
+      <div class="center">
+        <h1>INVERSIONES ROMUR, S.R.L.</h1>
+        <div class="rnc">RNC: 1-31-54515-7</div>
+        <div class="band">COTIZACIÓN</div>
+      </div>
+      <div class="meta">
+        <div><b>Pág.:</b> 1</div>
+        <div><b>Fecha:</b> 13/07/2026</div>
+        <div><b>Validez:</b> 30 días</div>
+      </div>
+    </div>
+
+    <div class="info">
+      <div class="col left">
+        <div><b>Cliente:</b> Fideicomiso Filantrópico de los Juegos Centroamericanos y del Caribe Santo Domingo 2026</div>
+        <div><b>RNC:</b> 1-32-68227-2</div>
+      </div>
+      <div class="col right">
+        <div><b>Moneda:</b> Peso dominicano (DOP)</div>
+      </div>
+    </div>
+
+    <table class="items">
+      <thead>
+        <tr>
+          <th>Nº</th>
+          <th class="desc">DESCRIPCIÓN</th>
+          <th>CANT.</th>
+          <th>UNIDAD</th>
+          <th class="num">PRECIO UNIT.</th>
+          <th class="num">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="no">1</td>
+          <td class="desc">
+            <div class="name">JUEGO DE AGARRES PARA POLEAS</div>
+            <div class="sub">PRINCIPALMENTE PARA EJERCICIOS DE ESPALDA</div>
+          </td>
+          <td>2.00</td>
+          <td>Und</td>
+          <td class="num">38,320.00</td>
+          <td class="num">76,640.00</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="photo-card">
+      <div class="label">
+        <div class="tag">IMAGEN DE REFERENCIA</div>
+        <p>Juego de agarres para poleas, principalmente para ejercicios de espalda.
+        Cotización por dos (2) juegos. El rack exhibidor que aparece en la imagen
+        no está incluido.</p>
+      </div>
+      <div class="img"><img src="rack_photo.png" alt="Juego de agarres para poleas"></div>
+    </div>
+
+    <div class="total-row">
+      <div class="total-pill">
+        <span class="lbl">TOTAL EQUIPOS (DOP)</span>
+        <span class="amt">76,640.00</span>
+      </div>
+    </div>
+
+    <div class="note">
+      <div class="sq"></div>
+      Precios netos por renglón. El ITBIS se detalla en el presupuesto adjunto.
+    </div>
+
+    <div class="pfooter"><div class="strip"></div></div>
+  </div>
+
+  <!-- ================= CONDICIONES ================= -->
+  <div class="page cond">
+    <h2>CONDICIONES&nbsp;&nbsp;·&nbsp;&nbsp;PAGO</h2>
+
+    <div class="bank">
+      <div class="bank-head">DATOS PARA TRANSFERENCIA BANCARIA</div>
+      <div class="grid">
+        <div class="cell"><div class="k">TITULAR</div><div class="v">Inversiones ROMUR, S.R.L.</div></div>
+        <div class="cell"><div class="k">RNC</div><div class="v">1-31-54515-7</div></div>
+        <div class="cell"><div class="k">BANCO</div><div class="v">Banco Santa Cruz</div></div>
+        <div class="cell"><div class="k">TIPO DE CUENTA</div><div class="v">Ahorros (RD$)</div></div>
+        <div class="cell"><div class="k">NÚMERO DE CUENTA</div><div class="v">11022000025651</div></div>
+        <div class="cell"><div class="k">MONEDA</div><div class="v">Peso dominicano (DOP)</div></div>
+        <div class="cell full"><div class="k">CONTACTO</div><div class="v">r.murillo@inversionesromur.com · j.murillo@inversionesromur.com</div></div>
+      </div>
+    </div>
+
+    <div class="thanks">Realizado el pago, favor remitir el comprobante de la transferencia a
+    cualquiera de los correos indicados. Agradecemos su preferencia.</div>
+
+    <div class="cfoot-line">INVERSIONES ROMUR, S.R.L. · RNC 1-31-54515-7 · Calle Melvin Jones #158,
+    Geanlin V 4B, La Esperilla, Santo Domingo · (809) 645-0075 · r.murillo@inversionesromur.com</div>
+
+    <div class="pfooter"><div class="strip"></div></div>
+  </div>
+
+</body>
+</html>
