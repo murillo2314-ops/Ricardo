@@ -1,0 +1,534 @@
+<title>Cobranza Romur</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Courier+Prime:wght@400;700&family=Sacramento&display=swap">
+
+<style>
+  :root{
+    /* Ambient desk — the surface the letter rests on (theme-aware) */
+    --desk-1:#dde3ec;
+    --desk-2:#c9d2df;
+    --desk-glow: rgba(20,48,89,.12);
+    --paper-shadow: rgba(18,32,54,.30);
+
+    /* The sheet of corporate stationery — constant across themes */
+    --paper:#f7f5ef;
+    --paper-2:#f0ede3;
+    --paper-edge:#e3ddcd;
+    --ink:#1b2430;
+    --ink-soft:#4d5766;
+    --ink-faint:#828c9b;
+    --navy:#143059;
+    --navy-deep:#0e2038;
+    --gold:#b1852f;
+    --gold-soft:#c7a24d;
+    --rose:#c24c68;
+    --emerald:#2f7d5b;
+    --rule:#ddd8c9;
+    --rule-strong:#c8c1ad;
+    --margin-line: rgba(20,48,89,.28);
+    --stamp: rgba(176,42,58,.7);
+  }
+  :root:not([data-theme="light"]){
+    @media (prefers-color-scheme: dark){
+      --desk-1:#141c28;
+      --desk-2:#0c121c;
+      --desk-glow: rgba(199,162,77,.14);
+      --paper-shadow: rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"]{
+    --desk-1:#141c28;
+    --desk-2:#0c121c;
+    --desk-glow: rgba(199,162,77,.14);
+    --paper-shadow: rgba(0,0,0,.55);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family:"Lora", Georgia, "Times New Roman", serif;
+    color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 50% -10%, var(--desk-glow), transparent 60%),
+      linear-gradient(160deg, var(--desk-1), var(--desk-2));
+    background-attachment: fixed;
+    min-height:100vh;
+    padding:clamp(16px,4vw,52px) 16px clamp(40px,7vw,80px);
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .sheet{
+    max-width:820px;
+    margin:0 auto;
+    background:linear-gradient(180deg, var(--paper), var(--paper-2) 120%);
+    color:var(--ink);
+    border:1px solid var(--paper-edge);
+    border-top:4px solid var(--navy);
+    border-radius:3px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.5) inset,
+      0 30px 60px -24px var(--paper-shadow),
+      0 4px 14px -8px var(--paper-shadow);
+    padding:clamp(24px,5vw,58px) clamp(22px,5vw,62px) clamp(30px,5vw,58px);
+    position:relative;
+    overflow:hidden;
+  }
+  .sheet::before{
+    content:"";
+    position:absolute;top:0;bottom:0;
+    left:clamp(14px,3.4vw,40px);
+    width:0;border-left:1px solid var(--margin-line);
+    opacity:.5;
+  }
+  @media (max-width:560px){ .sheet::before{display:none} }
+
+  /* ---------- Letterhead ---------- */
+  .letterhead{
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding-bottom:16px;border-bottom:2px solid var(--navy);
+    position:relative;
+  }
+  .emblem{
+    flex:0 0 auto;
+    width:66px;height:66px;border-radius:14px;
+    background:linear-gradient(150deg, var(--navy), var(--navy-deep));
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 0 1.5px var(--gold), 0 0 0 4px rgba(177,133,47,.18), 0 6px 16px -8px rgba(14,32,56,.6);
+    position:relative;
+  }
+  .emblem .rm{
+    font-family:"Cormorant Garamond", serif;font-weight:700;
+    font-size:30px;letter-spacing:.02em;color:var(--gold-soft);line-height:1;
+  }
+  .emblem::after{
+    content:"";position:absolute;inset:7px;border-radius:9px;
+    border:1px solid rgba(199,162,77,.35);
+  }
+  .brand{flex:1 1 auto;min-width:200px}
+  .brand-eyebrow{
+    font-family:"Courier Prime", monospace;
+    font-size:11px;letter-spacing:.42em;text-transform:uppercase;
+    color:var(--gold);margin:0 0 1px;padding-left:2px;
+  }
+  .brand-name{
+    font-family:"Cormorant Garamond", serif;font-weight:700;
+    font-size:clamp(30px,6.4vw,48px);line-height:.92;margin:0;
+    color:var(--navy);letter-spacing:.06em;
+  }
+  .brand-tag{
+    font-family:"Cormorant Garamond", serif;font-style:italic;font-weight:500;
+    font-size:clamp(13px,2.4vw,16px);color:var(--ink-soft);
+    margin:5px 0 0;letter-spacing:.02em;
+  }
+  .brand-contact{
+    flex:1 1 220px;text-align:right;
+    font-family:"Courier Prime", monospace;
+    font-size:10.5px;line-height:1.75;color:var(--ink-faint);
+    letter-spacing:.02em;text-transform:uppercase;
+  }
+  @media (max-width:620px){
+    .letterhead{justify-content:center;text-align:center}
+    .brand{text-align:center}
+    .brand-contact{text-align:center;flex-basis:100%}
+  }
+
+  /* ---------- Document band ---------- */
+  .docband{
+    margin:18px 0 4px;text-align:center;
+    background:linear-gradient(180deg, var(--navy), var(--navy-deep));
+    color:#eef2f8;border-radius:5px;padding:11px 14px;
+  }
+  .docband .t{
+    font-family:"Cormorant Garamond",serif;font-weight:700;
+    font-size:clamp(17px,3.4vw,23px);letter-spacing:.06em;line-height:1.1;
+  }
+  .docband .s{
+    font-family:"Courier Prime",monospace;font-size:10px;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--gold-soft);margin-top:3px;
+  }
+
+  .docket{
+    display:flex;flex-wrap:wrap;gap:10px 26px;justify-content:space-between;
+    align-items:flex-start;margin:16px 0 4px;
+    font-family:"Courier Prime", monospace;font-size:12px;color:var(--ink-soft);
+  }
+  .docket b{color:var(--ink);font-weight:700}
+  .docket .k{color:var(--ink-faint);text-transform:uppercase;font-size:10px;letter-spacing:.12em}
+
+  .stamp{
+    position:absolute;
+    top:clamp(96px,20vw,150px);right:clamp(10px,4vw,40px);
+    transform:rotate(-12deg);
+    border:2.5px solid var(--stamp);color:var(--stamp);
+    border-radius:7px;padding:6px 12px 5px;
+    font-family:"Courier Prime", monospace;font-weight:700;text-transform:uppercase;
+    text-align:center;line-height:1.1;letter-spacing:.1em;opacity:.85;pointer-events:none;
+  }
+  .stamp .big{font-size:16px;display:block}
+  .stamp .sm{font-size:9px;display:block;letter-spacing:.14em;margin-top:2px}
+
+  hr.rule{border:0;border-top:1px solid var(--rule);margin:20px 0}
+  hr.rule.strong{border-top:1.5px solid var(--rule-strong)}
+
+  /* ---------- Parties ---------- */
+  .parties{display:grid;grid-template-columns:1fr 1fr;gap:14px 26px;margin:18px 0 4px}
+  @media (max-width:560px){ .parties{grid-template-columns:1fr} }
+  .party .label{
+    font-family:"Courier Prime", monospace;font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--gold);margin-bottom:2px;
+  }
+  .party .name{font-family:"Cormorant Garamond", serif;font-weight:700;font-size:20px;line-height:1.15;color:var(--ink)}
+  .party .alias{font-style:italic;color:var(--ink-soft);font-size:14px}
+
+  .subject{
+    margin:16px 0 6px;padding:12px 16px;background:rgba(20,48,89,.06);
+    border-left:3px solid var(--gold);border-radius:0 4px 4px 0;
+  }
+  .subject .k{font-family:"Courier Prime", monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--navy)}
+  .subject .v{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(16px,3vw,20px);line-height:1.22;color:var(--ink);text-wrap:balance}
+
+  /* ---------- Body ---------- */
+  .body p{margin:0 0 14px}
+  .lead{font-size:1.02em}
+  .salutation{font-family:"Cormorant Garamond",serif;font-size:19px;font-weight:600;margin-bottom:12px}
+
+  h2.section{
+    font-family:"Courier Prime", monospace;font-size:12px;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--navy);margin:26px 0 12px;padding-bottom:6px;border-bottom:1px dotted var(--rule-strong);
+    display:flex;align-items:baseline;gap:10px;
+  }
+  h2.section .n{color:var(--gold);font-weight:700}
+
+  .clauses{margin:0;padding:0;list-style:none;counter-reset:cl}
+  .clauses > li{position:relative;padding:0 0 14px 44px;margin:0}
+  .clauses > li::before{
+    counter-increment:cl;content:counter(cl, upper-roman) ".";
+    position:absolute;left:0;top:0;font-family:"Cormorant Garamond",serif;font-weight:700;font-size:18px;
+    color:var(--navy);width:38px;text-align:right;
+  }
+  .clauses .term{font-weight:600;color:var(--navy-deep)}
+  .whereas{font-family:"Courier Prime",monospace;font-size:11px;letter-spacing:.1em;color:var(--gold);text-transform:uppercase;font-weight:700}
+
+  /* ---------- Statement of account ---------- */
+  .account{margin:14px 0 4px;border:1px solid var(--rule-strong);border-radius:4px;overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.5) inset}
+  .account .cap{
+    background:var(--navy);color:#eef2f8;font-family:"Courier Prime",monospace;
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;text-align:center;padding:8px 10px;
+  }
+  .tablewrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:14px;min-width:440px}
+  thead th{
+    font-family:"Courier Prime",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-soft);text-align:left;padding:9px 14px;border-bottom:1px solid var(--rule-strong);background:var(--paper-2);
+  }
+  th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tbody td{padding:9px 14px;border-bottom:1px dotted var(--rule);vertical-align:top}
+  tbody tr:last-child td{border-bottom:0}
+  td .concept{font-weight:500}
+  td .art{display:block;font-size:11px;color:var(--ink-faint);font-style:italic}
+  tfoot td{padding:8px 14px;font-variant-numeric:tabular-nums}
+  tfoot .sub td{border-top:1.5px solid var(--rule-strong);color:var(--ink-soft)}
+  tfoot .total td{
+    background:rgba(177,133,47,.14);font-family:"Cormorant Garamond",serif;font-weight:700;font-size:18px;
+    color:var(--navy-deep);border-top:2px solid var(--gold);
+  }
+  tfoot .total .num{color:var(--navy)}
+  .foot-note{font-family:"Courier Prime",monospace;font-size:10.5px;color:var(--ink-faint);margin:6px 2px 0;letter-spacing:.02em}
+
+  .demand{
+    margin:22px 0;padding:16px 18px;border:1.5px solid var(--navy);border-radius:5px;
+    background:repeating-linear-gradient(135deg, transparent 0 12px, rgba(20,48,89,.03) 12px 24px);
+  }
+  .demand .h{font-family:"Courier Prime",monospace;font-weight:700;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--navy);margin-bottom:8px}
+  .pay-modes{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px}
+  .pay-modes li{padding-left:24px;position:relative}
+  .pay-modes li::before{content:"💋";position:absolute;left:0;top:0;font-size:13px}
+
+  /* ---------- Signature ---------- */
+  .sign{display:flex;flex-wrap:wrap;gap:26px 40px;align-items:flex-end;justify-content:space-between;margin:30px 0 8px}
+  .sig-block{flex:1 1 240px;min-width:220px}
+  .sig-ppp{font-family:"Courier Prime",monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:2px}
+  .sig-name{font-family:"Sacramento", cursive;font-size:44px;line-height:.8;color:var(--navy-deep);padding:6px 4px 2px}
+  .sig-line{border-top:1.5px solid var(--ink);padding-top:6px}
+  .sig-line .who{font-family:"Cormorant Garamond",serif;font-weight:700;font-size:17px}
+  .sig-line .role{font-size:12.5px;color:var(--ink-soft);font-style:italic}
+  .sig-line .bar{font-family:"Courier Prime",monospace;font-size:10.5px;color:var(--ink-faint);letter-spacing:.06em;margin-top:2px}
+
+  .seal{
+    flex:0 0 auto;width:118px;height:118px;border-radius:50%;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+    color:var(--gold-soft);
+    background:radial-gradient(circle at 38% 34%, #1d3d6b, var(--navy) 58%, var(--navy-deep));
+    box-shadow:0 6px 14px -6px rgba(14,32,56,.6), 0 0 0 4px rgba(177,133,47,.32), 0 0 0 5px rgba(20,48,89,.25) inset;
+    transform:rotate(-8deg);position:relative;
+  }
+  .seal .ring{position:absolute;inset:9px;border-radius:50%;border:1px dashed rgba(199,162,77,.55)}
+  .seal .mono{font-family:"Cormorant Garamond",serif;font-weight:700;font-size:30px;line-height:1;color:var(--gold-soft)}
+  .seal .txt{font-family:"Courier Prime",monospace;font-size:7px;letter-spacing:.1em;color:#e7d6a6;text-transform:uppercase;margin-top:3px;padding:0 8px;line-height:1.25}
+
+  /* ---------- Acuse de recibo ---------- */
+  .acuse{margin-top:28px;border:2px dashed var(--rule-strong);border-radius:6px;padding:16px 18px 18px;background:var(--paper-2)}
+  .acuse .scissors{font-family:"Courier Prime",monospace;font-size:11px;letter-spacing:.2em;color:var(--ink-faint);text-transform:uppercase;margin:-28px 0 10px;text-align:center}
+  .acuse h3{font-family:"Courier Prime",monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--navy);margin:0 0 4px}
+  .acuse .intro{font-size:13.5px;color:var(--ink-soft);margin:0 0 12px}
+  .opts{display:grid;gap:9px;margin:0 0 14px}
+  .opt{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--rule-strong);border-radius:5px;background:var(--paper);cursor:pointer;transition:border-color .15s, background .15s}
+  .opt:hover{border-color:var(--gold)}
+  .opt input{margin-top:4px;accent-color:var(--navy);width:16px;height:16px;flex:0 0 auto}
+  .opt span{font-size:14px}
+  .opt.sel{border-color:var(--navy);background:rgba(20,48,89,.06)}
+  .acuse-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  button.btn{
+    font-family:"Courier Prime",monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+    border:0;border-radius:5px;padding:11px 18px;cursor:pointer;background:var(--navy);color:#eef2f8;font-weight:700;
+    box-shadow:0 3px 0 var(--navy-deep);transition:transform .08s, box-shadow .08s;
+  }
+  button.btn:hover{transform:translateY(1px);box-shadow:0 2px 0 var(--navy-deep)}
+  button.btn:active{transform:translateY(3px);box-shadow:0 0 0 var(--navy-deep)}
+  button.btn.ghost{background:transparent;color:var(--navy);box-shadow:none;border:1px solid var(--navy)}
+  button.btn:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+  .verdict{margin-top:12px;padding:12px 14px;border-radius:5px;background:rgba(47,125,91,.12);border-left:3px solid var(--emerald);font-size:14px;color:var(--ink)}
+  .verdict b{color:var(--emerald)}
+
+  .disclaimer{
+    margin-top:26px;padding-top:14px;border-top:1px solid var(--rule);
+    font-family:"Courier Prime",monospace;font-size:10.5px;line-height:1.7;color:var(--ink-faint);letter-spacing:.01em;
+  }
+  .disclaimer b{color:var(--ink-soft)}
+
+  .toolbar{max-width:820px;margin:0 auto 14px;display:flex;justify-content:flex-end;gap:8px}
+  .toolbar button{
+    font-family:"Courier Prime",monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    background:rgba(255,255,255,.10);color:inherit;border:1px solid rgba(120,140,170,.45);border-radius:5px;padding:7px 12px;cursor:pointer;
+  }
+  .toolbar button:hover{background:rgba(20,48,89,.14)}
+  .toolbar button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+  @media print{
+    *{-webkit-print-color-adjust:exact !important; print-color-adjust:exact !important}
+    body{background:#fff;padding:0}
+    .toolbar{display:none}
+    .sheet{box-shadow:none;border:0;border-top:4px solid var(--navy);max-width:none;padding:24px 30px}
+    .acuse,.account,.sign{break-inside:avoid}
+  }
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important} }
+</style>
+
+<div class="toolbar">
+  <button type="button" id="printBtn">🖨 Imprimir / Guardar PDF</button>
+</div>
+
+<main class="sheet">
+
+  <header class="letterhead">
+    <div class="emblem" aria-hidden="true"><span class="rm">RM</span></div>
+    <div class="brand">
+      <p class="brand-eyebrow">Inversiones</p>
+      <h1 class="brand-name">ROMUR</h1>
+      <p class="brand-tag">Gestión de Activos Afectivos · Departamento Legal y de Cobranzas</p>
+    </div>
+    <div class="brand-contact">
+      Av. de los Suspiros 143<br>
+      Torre Corazón, Piso&nbsp;∞<br>
+      Tel. 809-XOXO-ROMUR<br>
+      RNC B-∞-BESOS-01
+    </div>
+  </header>
+
+  <div class="docband">
+    <div class="t">Notificación formal de cobro</div>
+    <div class="s">Cuenta vencida · Gestión de cartera morosa</div>
+  </div>
+
+  <div class="stamp">
+    <span class="big">En Mora</span>
+    <span class="sm">saldo vencido</span>
+  </div>
+
+  <div class="docket">
+    <div><div class="k">Cuenta No.</div><b>ROMUR-2026-1447</b></div>
+    <div><div class="k">Producto</div><b>Línea de crédito en besos</b></div>
+    <div><div class="k">Fecha de corte</div><b>10 de septiembre de 2026</b></div>
+  </div>
+
+  <hr class="rule strong">
+
+  <div class="parties">
+    <div class="party">
+      <div class="label">Acreedor</div>
+      <div class="name">Inversiones Romur, S.R.L.</div>
+      <div class="alias">por conducto de su titular, el <b>Ing.&nbsp;Ricardo&nbsp;Murillo</b>, en lo adelante <b>«EL ACREEDOR»</b></div>
+    </div>
+    <div class="party">
+      <div class="label">Deudora (cuenta en mora)</div>
+      <div class="name">Sra. Angélica Castillo</div>
+      <div class="alias">titular de la cuenta vencida, en lo adelante <b>«LA CLIENTE MOROSA»</b></div>
+    </div>
+  </div>
+
+  <div class="subject">
+    <div class="k">Asunto</div>
+    <div class="v">Requerimiento de pago del saldo vencido por concepto de FERIA DE BESOS DEBIDA, derivado del contrato de licencia y uso de stickers de WhatsApp de exclusiva propiedad de EL ACREEDOR.</div>
+  </div>
+
+  <hr class="rule">
+
+  <section class="body">
+    <p class="salutation">Distinguida y muy amada Sra. Castillo:</p>
+
+    <p class="lead">Reciba un cordial —y perdidamente parcializado— saludo de parte de <b>INVERSIONES ROMUR, S.R.L.</b> El Departamento Legal y de Cobranzas de esta institución, en el ejercicio de sus facultades cardíacas y con el debido respeto que el afecto impone, tiene a bien <b>NOTIFICARLE FORMALMENTE</b> que su cuenta registra un saldo <b>vencido, exigible y descaradamente impago</b>, cuyo pago —pactado en besos— se le requiere por la presente.</p>
+
+    <h2 class="section"><span class="n">§</span> De los hechos que anteceden</h2>
+    <ol class="clauses">
+      <li><span class="whereas">Por cuanto:</span> Consta en los registros de esta institución que EL ACREEDOR diseñó, produjo y puso en circulación una colección de <span class="term">stickers de WhatsApp de creación original</span>, activos protegidos e inscritos en el portafolio de INVERSIONES ROMUR bajo la <em>Ley de Propiedad Intelectual del Corazón No.&nbsp;14-Besos</em>.</li>
+
+      <li><span class="whereas">Por cuanto:</span> LA CLIENTE MOROSA, conociendo el carácter licenciado de dicha obra, procedió a <span class="term">reenviarlos, reutilizarlos y apropiárselos</span> —en algunos casos, a capturarlos en pantalla y hacerlos pasar como propios— disponiendo así de su <em>línea de crédito en besos</em> sin abonar cuota alguna.</li>
+
+      <li><span class="whereas">Por cuanto:</span> Entre las partes se perfeccionó un <span class="term">contrato verbal, tácito y risueño</span>, formalizado con un apretón de manos que en realidad fue un abrazo, en virtud del cual todo uso de sticker ajeno genera de pleno derecho la obligación de pagar la tarifa vigente en besos.</li>
+
+      <li><span class="whereas">Por cuanto:</span> Gestionada amigablemente en múltiples ocasiones —por vía de mirada insistente, mensajito de voz y suspiro certificado— LA CLIENTE MOROSA ha incurrido en <span class="term">negativa contumaz y reiterada</span>, alegando de forma temeraria e improcedente que «ya te di uno ayer» y «estás cobrando de más».</li>
+    </ol>
+
+    <h2 class="section"><span class="n">§</span> Estado de cuenta certificado</h2>
+    <p>Se hace constar, con la solemnidad del caso y previa auditoría del corazón, el detalle de la cartera vencida a la fecha de corte:</p>
+
+    <div class="account">
+      <div class="cap">Inversiones Romur · Estado de cuenta — Cartera vencida · Corte al 10/09/2026</div>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Concepto de la disposición</th><th class="num">Veces</th><th class="num">Besos</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="concept">Reenvío de sticker sin dar el crédito debido</span><span class="art">Art. 2 — reproducción no autorizada</span></td><td class="num">18</td><td class="num">360</td></tr>
+            <tr><td><span class="concept">Uso de sticker de EL ACREEDOR en estado ajeno</span><span class="art">Art. 5 — apropiación con dolo tierno</span></td><td class="num">7</td><td class="num">210</td></tr>
+            <tr><td><span class="concept">Captura de pantalla del sticker (piratería sentimental)</span><span class="art">Art. 9 — copia sin licencia</span></td><td class="num">4</td><td class="num">200</td></tr>
+            <tr><td><span class="concept">Reírse del chiste del sticker sin pagar el peaje</span><span class="art">Art. 12 — disfrute no arancelado</span></td><td class="num">23</td><td class="num">230</td></tr>
+            <tr><td><span class="concept">Recargo por decir «después te pago» y no pagar</span><span class="art">Art. 14 — promesa incumplida</span></td><td class="num">1</td><td class="num">100</td></tr>
+          </tbody>
+          <tfoot>
+            <tr class="sub"><td colspan="2">Subtotal de capital adeudado</td><td class="num">1&nbsp;100</td></tr>
+            <tr class="sub"><td colspan="2">Intereses moratorios (12% capitalizable diariamente en abrazos)</td><td class="num">132</td></tr>
+            <tr class="sub"><td colspan="2">Cargo por gestión de cobranza</td><td class="num">75</td></tr>
+            <tr class="total"><td colspan="2">Saldo total vencido a la fecha</td><td class="num">1&nbsp;307 besos</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+    <p class="foot-note">* La mora continúa devengándose a razón de un (1) beso por cada hora de negativa injustificada. Saldo sujeto a reporte al buró de crédito del corazón (Data-Cariño).</p>
+
+    <h2 class="section"><span class="n">§</span> Por tanto, se requiere</h2>
+    <div class="demand">
+      <div class="h">Inversiones Romur le intima y requiere formalmente a:</div>
+      <p style="margin:0 0 10px"><b>PRIMERO:</b> Saldar la totalidad del monto vencido de <b>MIL TRESCIENTOS SIETE (1&nbsp;307) BESOS</b>, en un plazo perentorio que vence en el <b>próximo abrazo</b> y en todo caso no más tarde de las 48 horas contadas a partir de la presente notificación.</p>
+      <p style="margin:0 0 6px"><b>SEGUNDO:</b> El pago habrá de efectuarse en cualquiera de las siguientes modalidades de curso legal y afectivo, aceptadas en caja por esta institución:</p>
+      <ul class="pay-modes">
+        <li>Beso en la mejilla — de bajo valor, se aceptan en cantidad.</li>
+        <li>Beso de piquito — equivale a cinco (5) besos de mejilla.</li>
+        <li>Beso con retención mínima de tres (3) segundos — liquida hasta veinte (20) besos.</li>
+        <li>Abrazo prolongado con balanceo — acumulable como abono a capital.</li>
+      </ul>
+    </div>
+
+    <h2 class="section"><span class="n">§</span> Consecuencias del incumplimiento</h2>
+    <p>De persistir LA CLIENTE MOROSA en su injustificada negativa, INVERSIONES ROMUR se verá en la penosa —aunque entrañable— obligación de accionar las siguientes medidas de recuperación de cartera, plenamente ejecutables sin necesidad de fianza:</p>
+    <ol class="clauses">
+      <li>Reporte de la cuenta al <span class="term">buró de crédito del corazón (Data-Cariño)</span>, afectando su historial de mimos.</li>
+      <li>Ejecución inmediata de <span class="term">cosquillas conminatorias</span> hasta el total pago de lo debido.</li>
+      <li>Embargo retentivo del control remoto y de la última porción de postre.</li>
+      <li>Condena a la proyección forzosa de una (1) película romántica elegida íntegramente por EL ACREEDOR.</li>
+    </ol>
+
+    <h2 class="section"><span class="n">§</span> Oferta de reestructuración amistosa</h2>
+    <p>No obstante lo anterior, y por tratarse de la clienta más querida de esta cartera, INVERSIONES ROMUR manifiesta su absoluta disposición a una <b>reestructuración amistosa y extrajudicial</b> de la deuda: se hace constar que el saldo podrá declararse íntegramente saldado, condonado y perdonado mediante <b>un solo beso dado de corazón</b>, prueba fehaciente de que la gestión nunca fue por los besos, sino por la excusa de pedirlos.</p>
+
+    <p>Sin otro particular, y reservándose INVERSIONES ROMUR todos los derechos, acciones y ternuras que la ley del cariño le confiere, le saluda muy atentamente —y con evidente conflicto de intereses—,</p>
+
+    <div class="sign">
+      <div class="sig-block">
+        <div class="sig-ppp">P.P. Inversiones Romur, S.R.L.</div>
+        <div class="sig-name">R. Murillo</div>
+        <div class="sig-line">
+          <div class="who">Ing. Ricardo Murillo</div>
+          <div class="role">Presidente &amp; Acreedor · Departamento de Cobranzas</div>
+          <div class="bar">Inversiones Romur · Cuenta ROMUR-2026-1447</div>
+        </div>
+      </div>
+      <div class="seal" aria-hidden="true">
+        <span class="ring"></span>
+        <span class="mono">RM</span>
+        <span class="txt">Inversiones Romur · Cobranzas</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="acuse" aria-label="Acuse de recibo">
+    <div class="scissors">✂ — — — — — — — — — corte por la línea punteada — — — — — — — — —</div>
+    <h3>Acuse de recibo &amp; declaración de la deudora</h3>
+    <p class="intro">Yo, <b>Angélica Castillo</b>, doy por recibida la presente notificación de Inversiones Romur y, ante el tribunal del corazón, declaro:</p>
+    <form id="acuseForm">
+      <div class="opts">
+        <label class="opt"><input type="radio" name="veredicto" value="pago"><span>Me declaro <b>deudora confesa</b> y procedo al pago inmediato del saldo total, con intereses incluidos.</span></label>
+        <label class="opt"><input type="radio" name="veredicto" value="cuotas"><span>Reconozco la deuda y solicito <b>plan de pagos</b>: abonaré en cuotas diarias hasta liquidar.</span></label>
+        <label class="opt"><input type="radio" name="veredicto" value="apelo"><span><b>Apelo</b> el cobro y contrademando: alego que él también me debe besos (reconvención).</span></label>
+        <label class="opt"><input type="radio" name="veredicto" value="corazon"><span>Me acojo a la <b>reestructuración amistosa</b>: saldo la deuda entera con un solo beso de corazón.</span></label>
+      </div>
+      <div class="acuse-actions">
+        <button type="submit" class="btn">Firmar acuse ✍</button>
+        <button type="button" class="btn ghost" id="resetBtn">Limpiar</button>
+      </div>
+    </form>
+    <div class="verdict" id="verdict" hidden></div>
+  </section>
+
+  <p class="disclaimer">
+    <b>NOTA LEGAL (esta sí en serio):</b> El presente documento es una <b>broma cariñosa entre pareja</b> y carece por completo de validez jurídica. «Inversiones Romur» es una entidad ficticia de uso humorístico; este escrito no constituye demanda, requerimiento, título ejecutorio ni obligación de ninguna especie; no es exigible ante tribunal, notaría ni autoridad alguna, y no ampara chantaje, coacción, presión ni obligación personal real. El único tribunal competente es el del cariño y su jurisdicción es 100% voluntaria. Todo «pago» es libre, revocable y sujeto al buen humor de ambas partes. Nombres, cargos, sellos y artículos aquí citados son ficticios. Redactado con amor; ejecútese con ternura.
+  </p>
+
+</main>
+
+<script>
+  (function(){
+    var form = document.getElementById('acuseForm');
+    var opts = Array.prototype.slice.call(document.querySelectorAll('.opt'));
+    var verdict = document.getElementById('verdict');
+    var reset = document.getElementById('resetBtn');
+    var print = document.getElementById('printBtn');
+
+    var responses = {
+      pago:    'Cuenta ROMUR-2026-1447: <b>SALDADA</b>. Se registra pago inmediato del total. Inversiones Romur agradece su preferencia y ordena cobrar en el acto. 💋',
+      cuotas:  '<b>PLAN DE PAGOS APROBADO</b>. Se fija una cuota mínima de un (1) beso diario, sin penalidad por pago anticipado. Se recomienda adelantar cuotas.',
+      apelo:   'Reconvención admitida: <b>APELACIÓN Y CONTRADEMANDA</b>. El tribunal declara que ambas partes se deben besos y ordena la <b>compensación de saldos en persona</b>, cuanto antes.',
+      corazon: '<b>REESTRUCTURACIÓN APROBADA</b>. La deuda se declara condonada por un solo beso de corazón. Cuenta cerrada, aunque Inversiones Romur se reserva el derecho de volver a cobrar mañana. ❤'
+    };
+
+    function syncSel(){ opts.forEach(function(o){ o.classList.toggle('sel', o.querySelector('input').checked); }); }
+    opts.forEach(function(o){ o.addEventListener('change', syncSel); });
+
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      var sel = form.querySelector('input[name="veredicto"]:checked');
+      verdict.hidden = false;
+      if(!sel){ verdict.innerHTML = 'Debe marcar una casilla antes de firmar. El silencio del corazón no es defensa oponible. 😉'; return; }
+      verdict.innerHTML = responses[sel.value];
+      try{ localStorage.setItem('acuse-romur', sel.value); }catch(e){}
+    });
+
+    reset.addEventListener('click', function(){
+      form.reset(); syncSel(); verdict.hidden = true; verdict.innerHTML = '';
+      try{ localStorage.removeItem('acuse-romur'); }catch(e){}
+    });
+
+    try{
+      var saved = localStorage.getItem('acuse-romur');
+      if(saved){
+        var input = form.querySelector('input[value="'+saved+'"]');
+        if(input){ input.checked = true; syncSel(); verdict.hidden = false; verdict.innerHTML = responses[saved]; }
+      }
+    }catch(e){}
+
+    print.addEventListener('click', function(){ window.print(); });
+  })();
+</script>
