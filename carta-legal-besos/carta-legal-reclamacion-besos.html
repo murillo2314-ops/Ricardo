@@ -417,9 +417,13 @@
   .toolbar button:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
 
   @media print{
+    *{-webkit-print-color-adjust:exact !important; print-color-adjust:exact !important}
     body{background:#fff;padding:0}
     .toolbar{display:none}
-    .sheet{box-shadow:none;border:0;max-width:none}
+    .sheet{box-shadow:none;border:0;max-width:none;padding:24px 30px}
+    .acuse{break-inside:avoid}
+    .account{break-inside:avoid}
+    .sign{break-inside:avoid}
   }
   @media (prefers-reduced-motion: reduce){
     *{transition:none !important}
