@@ -2191,6 +2191,29 @@ async def on_bsc_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dice el ID de este chat. Sirve para sacar el GROUP_CHAT_ID del grupo
+    espejo sin meter un bot de terceros donde pasa información fiscal.
+
+    Funciona en grupos aunque la privacidad del bot esté activada: Telegram
+    siempre le entrega los comandos dirigidos a él (`/id@elbot`)."""
+    chat = update.effective_chat
+    if chat is None:
+        return
+    es_grupo = chat.type in ("group", "supergroup")
+    cola = ""
+    if es_grupo:
+        cola = (f"\n\nPonlo en Railway como:\n`GROUP_CHAT_ID={chat.id}`"
+                f"\n\nSi luego conviertes el grupo en supergrupo, el ID cambia "
+                f"y hay que volver a pedirlo.")
+    await update.message.reply_text(
+        f"🆔 *{md(chat.title or chat.first_name or 'este chat')}*\n"
+        f"Tipo: {chat.type}\n"
+        f"ID: `{chat.id}`{cola}",
+        parse_mode="Markdown",
+    )
+
+
 async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     await show_welcome(update, context)
@@ -2214,6 +2237,17 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # ya desbloqueado → dejar pasar a los demás handlers
 
     text = (update.message.text or "").strip() if (update.message and update.message.text) else ""
+
+    # En un grupo la contraseña se escribiría delante de todos, así que aquí no
+    # se pide: manda la lista blanca de IDs, ya verificada arriba. Se deja pasar
+    # /id (hace falta para configurar el grupo espejo) y se calla en lo demás
+    # para no llenar el grupo de mensajes del bot.
+    chat = update.effective_chat
+    if chat is not None and chat.type in ("group", "supergroup"):
+        if re.match(r"^/id(@\w+)?$", text):
+            return
+        raise ApplicationHandlerStop
+
     if text == BOT_PASSWORD:
         context.user_data["unlocked"] = True
         await show_welcome(update, context, newly_unlocked=True)
@@ -2726,6 +2760,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("borrar",     cmd_borrar))
     app.add_handler(CommandHandler("mes",        cmd_mes))
     app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
+    app.add_handler(CommandHandler("id",         cmd_id))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$"),    cmd_resumen))

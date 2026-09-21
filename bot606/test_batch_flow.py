@@ -527,6 +527,46 @@ async def run():
     check(fs["E310004470672"]["needs_review"] == 0,
           "y no caen en la cola de pendientes")
 
+    # ── Escenario J: /id y el silencio del bot en grupos ────────────────
+    print("\n— Escenario J: /id y el bot en un grupo —")
+    GID = -1001234567890
+
+    def upd_grupo(text, uid=UID):
+        return {"update_id": next(_upd_id),
+                "message": {"message_id": next(_msg_id), "date": int(time.time()),
+                            "chat": {"id": GID, "type": "supergroup",
+                                     "title": "606 ROMUR"},
+                            "from": {"id": uid, "is_bot": False,
+                                     "first_name": "Ricardo"},
+                            "text": text,
+                            "entities": [{"type": "bot_command",
+                                          "offset": 0, "length": len(text)}]
+                            if text.startswith("/") else []}}
+
+    n0 = len(fake.calls)
+    await drive(upd_grupo("/id"))
+    envios = [p for m, p in fake.calls[n0:] if m == "sendMessage"]
+    check(len(envios) == 1 and str(GID) in envios[0]["text"],
+          "/id en el grupo devuelve el ID del grupo")
+    check("GROUP_CHAT_ID" in envios[0]["text"],
+          "y te dice cómo ponerlo en Railway")
+
+    # un usuario sin desbloquear no debe provocar que el bot pida la
+    # contraseña delante de todo el grupo
+    OTRO = 999
+    bot.ALLOWED_USERS = set()
+    n1 = len(fake.calls)
+    await drive(upd_grupo("hola gente", uid=OTRO))
+    check(not [p for m, p in fake.calls[n1:] if m == "sendMessage"],
+          "el bot no pide la contraseña ni contesta nada en el grupo")
+    check(app.user_data[OTRO].get("unlocked") is not True,
+          "y tampoco desbloquea a nadie por escribir en el grupo")
+
+    n2 = len(fake.calls)
+    await drive(upd_grupo("/id", uid=OTRO))
+    check([p for m, p in fake.calls[n2:] if m == "sendMessage"],
+          "pero /id sí pasa aunque no haya desbloqueado (hace falta para configurar)")
+
     await app.shutdown()
 
     print()
