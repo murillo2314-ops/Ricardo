@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
@@ -887,6 +888,118 @@ def user_label(update: Update) -> str:
         return f"@{u.username}"
     nombre = " ".join(filter(None, [u.first_name, u.last_name])).strip()
     return nombre or str(u.id)
+
+
+# ──────────────────────────────────────────────────────────────
+# REPORTE DEL BANCO SANTA CRUZ
+# ──────────────────────────────────────────────────────────────
+
+# Banco Multiple Santa Cruz: el unico emisor que vale como 07 - Gastos
+# Financieros en el 606. Sus cargos (impuesto 2.0 por mil Ley 30-26, comisiones
+# LBTR) llegan como un solo Excel de comprobantes, no como facturas sueltas.
+RNC_BSC    = "102012921"
+NOMBRE_BSC = "BANCO MULTIPLE SANTA CRUZ"
+
+
+def parse_bsc_excel(file_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """Lee el Excel de comprobantes del Banco Santa Cruz.
+
+    El banco exporta una hoja con encabezados `NCF | Moneda | Monto |
+    Fecha Generacion`, y la fila de encabezado no siempre es la primera. Se
+    busca por nombre de columna en vez de por posicion, que es lo que se rompe
+    cuando el banco mueve algo.
+
+    Devuelve (filas, problemas). Una fila es un dict listo para save_factura.
+    """
+    from openpyxl import load_workbook
+
+    problemas: list[str] = []
+    try:
+        wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    except Exception as e:
+        return [], [f"No pude abrir el archivo: {e}"]
+
+    ws = wb[wb.sheetnames[0]]
+    filas_raw = [list(r) for r in ws.iter_rows(max_row=500, max_col=12, values_only=True)]
+
+    def norm_hdr(v):
+        v = unicodedata.normalize("NFKD", str(v or ""))
+        return "".join(c for c in v if not unicodedata.combining(c)).strip().lower()
+
+    hdr_idx, cols = None, {}
+    for i, fila in enumerate(filas_raw[:20]):
+        nombres = [norm_hdr(c) for c in fila]
+        if "ncf" in nombres and any(n.startswith("monto") for n in nombres):
+            hdr_idx = i
+            for j, n in enumerate(nombres):
+                if n == "ncf":                cols["ncf"] = j
+                elif n.startswith("monto"):   cols["monto"] = j
+                elif n.startswith("moneda"):  cols["moneda"] = j
+                elif n.startswith("fecha"):   cols["fecha"] = j
+            break
+
+    if hdr_idx is None:
+        return [], ["No encontré los encabezados. El archivo debe traer una fila "
+                    "con las columnas *NCF*, *Monto* y *Fecha*."]
+    if "fecha" not in cols:
+        return [], ["El archivo no trae columna de fecha."]
+
+    salida = []
+    for i, fila in enumerate(filas_raw[hdr_idx + 1:], hdr_idx + 2):
+        ncf = clean_ncf(str(fila[cols["ncf"]] or "")) if cols["ncf"] < len(fila) else ""
+        if not ncf:
+            continue
+
+        moneda = str(fila[cols["moneda"]] or "").strip() if "moneda" in cols else "RD$"
+        if moneda and moneda.upper().replace("$", "").strip() not in ("RD", "DOP", ""):
+            problemas.append(f"fila {i}: `{ncf}` está en {moneda}, no en pesos — se omite")
+            continue
+
+        try:
+            monto = round(float(fila[cols["monto"]]), 2)
+        except (TypeError, ValueError):
+            problemas.append(f"fila {i}: `{ncf}` sin monto legible — se omite")
+            continue
+        if monto <= 0:
+            problemas.append(f"fila {i}: `{ncf}` con monto {monto} — se omite")
+            continue
+
+        crudo = fila[cols["fecha"]]
+        if isinstance(crudo, datetime):
+            fecha = crudo.strftime("%Y-%m-%d")
+        else:
+            fecha = normalize_fecha(str(crudo or ""))
+        if not fecha:
+            problemas.append(f"fila {i}: `{ncf}` con fecha ilegible ({crudo!r}) — se omite")
+            continue
+
+        if not re.match(r"^(B\d{10}|E\d{12})$", ncf):
+            problemas.append(f"fila {i}: `{ncf}` no tiene forma de NCF — se omite")
+            continue
+
+        salida.append({
+            "rnc": RNC_BSC,
+            "ncf": ncf,
+            "nombre_proveedor": NOMBRE_BSC,
+            "fecha_comprobante": fecha,
+            "fecha_pago": fecha,
+            # Cargos bancarios: sin ITBIS. El monto completo es la base.
+            "monto_sin_itbis": monto,
+            "itbis": 0.0,
+            "total_facturado": monto,
+            "propina": 0.0,
+            "metodo_pago": "NOTA_CREDITO",
+            "tipo_comprobante": "01",
+            "observaciones": "Cargo bancario. Reporte de comprobantes BSC.",
+            "nivel_confianza": "ALTO",
+            "_qr_verified": False,
+            "_warnings": [],
+            "_filename": "reporte-bsc.xlsx",
+        })
+
+    if not salida and not problemas:
+        problemas.append("El archivo no traía ninguna fila con NCF.")
+    return salida, problemas
 
 
 async def notify_group(context: ContextTypes.DEFAULT_TYPE, texto: str,
@@ -1957,6 +2070,8 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"📥 *Descargar Excel* — archivo 606 listo para entregar\n"
         f"⚠️ *Pendientes* — facturas con advertencias\n"
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
+        f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
+        f"Mándamelo tal cual y lo cargo completo.\n\n"
         f"_Avanzado:_ /lista  /borrar  /mes YYYY-MM",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
@@ -1966,6 +2081,114 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     await show_welcome(update, context)
+
+
+async def on_bsc_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recibe el Excel de comprobantes del Banco Santa Cruz y lo deja listo
+    para guardar (previa confirmación). No entra al flujo guiado: son cargos
+    bancarios, no facturas que haya que fotografiar y clasificar."""
+    if not is_allowed(update):
+        return
+    doc = update.message.document
+    if doc.file_size and doc.file_size > 5 * 1024 * 1024:
+        await update.message.reply_text("❌ Ese archivo pesa demasiado (máximo 5 MB).")
+        return
+
+    aviso = await update.message.reply_text("📗 Leyendo el reporte del banco…")
+    try:
+        f = await context.bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await f.download_to_memory(buf)
+        filas, problemas = await asyncio.to_thread(parse_bsc_excel, buf.getvalue())
+    except Exception as e:
+        log.error("Error leyendo Excel BSC: %s", e)
+        await aviso.edit_text("❌ No pude abrir el archivo. ¿Es el Excel que baja del banco?")
+        return
+
+    if not filas:
+        await aviso.edit_text(
+            "❌ No pude sacar nada de ese archivo.\n\n" + "\n".join(f"• {p}" for p in problemas[:8]),
+            parse_mode="Markdown")
+        return
+
+    context.user_data["bsc_pending"] = filas
+    por_mes: dict[str, list] = {}
+    for r in filas:
+        por_mes.setdefault(r["fecha_comprobante"][:7], []).append(r)
+
+    total = sum(r["total_facturado"] for r in filas)
+    lineas = [
+        f"🏦 *Reporte del Banco Santa Cruz*",
+        f"📄 {len(filas)} comprobante(s)  ·  💰 RD$ {total:,.2f}",
+        "",
+        "Se guardarán como *07 – Gastos financieros*, sin ITBIS, y en el 606 "
+        "salen al final con forma de pago 06 – nota de crédito.",
+        "",
+    ]
+    for m in sorted(por_mes):
+        sub = sum(r["total_facturado"] for r in por_mes[m])
+        lineas.append(f"📆 {md(mes_label(m))}: {len(por_mes[m])} · RD$ {sub:,.2f}")
+    if problemas:
+        lineas.append("")
+        lineas.append(f"⚠️ {len(problemas)} fila(s) omitida(s):")
+        lineas += [f"• {p}" for p in problemas[:5]]
+        if len(problemas) > 5:
+            lineas.append(f"• …y {len(problemas) - 5} más")
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Guardar", callback_data="bsc_ok"),
+        InlineKeyboardButton("❌ Cancelar", callback_data="bsc_no"),
+    ]])
+    await aviso.edit_text("\n".join(lineas), reply_markup=kb, parse_mode="Markdown")
+
+
+async def on_bsc_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """✅/❌ del reporte del banco."""
+    query = update.callback_query
+    await query.answer()
+    filas = context.user_data.pop("bsc_pending", None)
+
+    if query.data == "bsc_no" or not filas:
+        await query.edit_message_text("🚫 Reporte descartado. No se guardó nada.")
+        return
+
+    guardadas, dups, meses = 0, 0, set()
+    for r in filas:
+        mes = r["fecha_comprobante"][:7]
+        fid = save_factura(mes, "Santo Domingo", "Banco", r,
+                           user_label(update), tipo_gasto="07", reviewed=True)
+        if fid:
+            guardadas += 1
+            meses.add(mes)
+        else:
+            dups += 1
+
+    drive_note = ""
+    if meses and drive_sync.is_configured():
+        ok = 0
+        for m in sorted(meses):
+            try:
+                xlsx = build_excel(get_facturas(m), m)
+                if await asyncio.to_thread(drive_sync.sync_excel, xlsx, f"606_{m}.xlsx"):
+                    ok += 1
+            except Exception as e:
+                log.error("Drive sync BSC (%s): %s", m, e)
+        drive_note = f"\n☁️ Excel actualizado en Drive ({ok}/{len(meses)} mes/es)."
+
+    resumen = (
+        f"✅ *{guardadas} comprobante(s) del banco guardado(s)*\n"
+        + (f"🔁 {dups} ya estaban — no se duplicaron\n" if dups else "")
+        + f"📆 {', '.join(md(mes_label(m)) for m in sorted(meses)) or '—'}"
+        + drive_note
+    )
+    await query.edit_message_text(resumen, parse_mode="Markdown")
+    await notify_group(
+        context,
+        f"🏦 *Reporte del Banco Santa Cruz* — {md(user_label(update))}\n"
+        f"✅ {guardadas} comprobante(s) · 07 gastos financieros"
+        + (f"\n🔁 {dups} duplicado(s) omitido(s)" if dups else ""),
+        origen_chat_id=update.effective_chat.id if update.effective_chat else None,
+    )
 
 
 async def cmd_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2509,6 +2732,13 @@ def build_application(bot=None) -> Application:
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_EXPORTAR)}$"),   cmd_exportar))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_PENDIENTES)}$"), cmd_pendientes))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AYUDA)}$"),      cmd_ayuda))
+
+    # Reporte de comprobantes del Banco Santa Cruz (.xlsx). Va fuera de la
+    # conversación: son cargos bancarios, no facturas que haya que clasificar.
+    app.add_handler(MessageHandler(
+        filters.Document.FileExtension("xlsx") & filters.ChatType.PRIVATE,
+        on_bsc_excel))
+    app.add_handler(CallbackQueryHandler(on_bsc_confirm, pattern="^bsc_(ok|no)$"))
 
     # Selección de ubicación y mes para /resumen y /exportar
     app.add_handler(CallbackQueryHandler(on_pick_resfilter, pattern="^resfilter_"))

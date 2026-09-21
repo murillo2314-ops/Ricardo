@@ -13,6 +13,7 @@ Uso:  python test_batch_flow.py
 """
 
 import asyncio
+import io
 import itertools
 import json
 import os
@@ -455,6 +456,76 @@ async def run():
     check(True, "si el envío al grupo falla, no se propaga la excepción")
 
     bot.GROUP_CHAT_ID = ""
+
+    # ── Escenario I: el Excel de comprobantes del Banco Santa Cruz ───────
+    print("\n— Escenario I: reporte del Banco Santa Cruz —")
+    from openpyxl import Workbook
+    from datetime import datetime
+
+    def bsc_xlsx(filas, encabezados=("NCF", "Moneda", "Monto", "Fecha Generación"),
+                 fila_hdr=2):
+        wb = Workbook(); ws = wb.active; ws.title = "NcfSummary-export-20260917"
+        for c, h in enumerate(encabezados, 1):
+            ws.cell(fila_hdr, c, h)
+        for i, f in enumerate(filas):
+            for c, v in enumerate(f, 1):
+                ws.cell(fila_hdr + 1 + i, c, v)
+        b = io.BytesIO(); wb.save(b); return b.getvalue()
+
+    d = datetime(2026, 8, 3)
+    filas, probs = bot.parse_bsc_excel(bsc_xlsx([
+        ("E310004470672", "RD$", 563.8, d),
+        ("E310004469302", "RD$", 200,   datetime(2026, 8, 31)),
+    ]))
+    check(len(filas) == 2 and not probs, "lee el formato del banco tal cual")
+    r = filas[0]
+    check(r["rnc"] == "102012921" and r["nombre_proveedor"] == bot.NOMBRE_BSC,
+          "les pone el RNC y el nombre del banco")
+    check(r["itbis"] == 0 and r["monto_sin_itbis"] == 563.8
+          and r["total_facturado"] == 563.8,
+          "sin ITBIS: el monto completo es la base")
+    check(r["fecha_comprobante"] == "2026-08-03", "la fecha sale en ISO")
+    check(filas[1]["fecha_comprobante"][:7] == "2026-08", "y el mes sale de la fecha")
+
+    # encabezados movidos de sitio y en otro orden
+    filas2, _ = bot.parse_bsc_excel(bsc_xlsx(
+        [(d, 563.8, "RD$", "E310004470672")],
+        encabezados=("Fecha Generacion", "Monto", "Moneda", "NCF"), fila_hdr=5))
+    check(len(filas2) == 1 and filas2[0]["ncf"] == "E310004470672",
+          "encuentra las columnas por nombre aunque el banco las mueva")
+
+    filas3, probs3 = bot.parse_bsc_excel(bsc_xlsx([
+        ("E310004470672", "RD$", 563.8, d),
+        ("E310004469999", "US$", 100.0, d),      # otra moneda
+        ("E310004469998", "RD$", None,  d),      # sin monto
+        ("E310004469997", "RD$", -5.0,  d),      # monto negativo
+        ("NO-ES-UN-NCF",  "RD$", 50.0,  d),      # NCF con mala forma
+        ("E310004469996", "RD$", 50.0,  "nunca"),  # fecha ilegible
+    ]))
+    check(len(filas3) == 1, "descarta dólares, montos malos, NCF raros y fechas ilegibles")
+    check(len(probs3) == 5, "y explica cada fila que omitió")
+    check(any("US$" in p for p in probs3), "diciendo cuál venía en otra moneda")
+
+    vacio, probs4 = bot.parse_bsc_excel(bsc_xlsx([], encabezados=("A", "B", "C")))
+    check(not vacio and probs4, "un archivo que no es del banco se rechaza con explicación")
+    check(bot.parse_bsc_excel(b"no soy un xlsx")[0] == [],
+          "y un archivo corrupto no revienta")
+
+    # guardar de verdad, con duplicados
+    guardadas = 0
+    for r in filas:
+        if bot.save_factura(r["fecha_comprobante"][:7], "Santo Domingo", "Banco",
+                            r, "@ricfut", tipo_gasto="07", reviewed=True):
+            guardadas += 1
+    check(guardadas == 2, "las dos se guardan")
+    check(bot.save_factura("2026-08", "Santo Domingo", "Banco", filas[0],
+                           "@ricfut", tipo_gasto="07", reviewed=True) == 0,
+          "y reenviar el mismo reporte no las duplica")
+    fs = {f["ncf"]: f for f in bot.get_facturas("2026-08")}
+    check(fs["E310004470672"]["tipo_gasto"] == "07",
+          "quedan como 07 — gastos financieros")
+    check(fs["E310004470672"]["needs_review"] == 0,
+          "y no caen en la cola de pendientes")
 
     await app.shutdown()
 
