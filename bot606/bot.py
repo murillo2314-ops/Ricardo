@@ -87,6 +87,12 @@ BOT_PASSWORD = os.environ.get("BOT_PASSWORD", "/Juan2202")
 # debe ser el del EMISOR de la factura.
 CONSUMER_RNC = os.environ.get("CONSUMER_RNC", "131545157")
 
+# Grupo espejo (opcional). Si se configura, cada factura guardada se anuncia
+# ahí para que todo el equipo vea qué entró y quién lo subió. La captura sigue
+# siendo por privado: el grupo SOLO recibe avisos, no procesa fotos.
+# El ID de un grupo es negativo (ej. -1001234567890).
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "").strip()
+
 # Conversation states.
 #   Individual: foto → ubicación → categoría → confirmar
 #   Lote:       (menú "Lote de fotos" | álbum directo | PDF) → ubicación →
@@ -883,6 +889,45 @@ def user_label(update: Update) -> str:
     return nombre or str(u.id)
 
 
+async def notify_group(context: ContextTypes.DEFAULT_TYPE, texto: str,
+                       origen_chat_id=None) -> None:
+    """Publica un aviso en el grupo espejo. Nunca rompe el flujo de quien sube.
+
+    Si GROUP_CHAT_ID no está configurado no hace nada, y si el mensaje viene del
+    propio grupo tampoco: sería un eco. Cualquier fallo de Telegram (el bot no
+    está en el grupo, lo sacaron, el ID está mal) se registra y se traga — la
+    factura ya está guardada y el usuario no tiene por qué enterarse."""
+    if not GROUP_CHAT_ID:
+        return
+    if origen_chat_id is not None and str(origen_chat_id) == GROUP_CHAT_ID:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID, text=texto,
+            parse_mode="Markdown", disable_notification=True,
+        )
+    except Exception as e:
+        log.error("No se pudo avisar al grupo %s: %s", GROUP_CHAT_ID, e)
+
+
+def _aviso_factura(fac_id: int, data: dict, mes: str, tipo_gasto: str,
+                   quien: str) -> str:
+    """El texto del aviso de UNA factura guardada."""
+    adv = data.get("_warnings") or []
+    tg_label = TIPO_GASTO_DICT.get(tipo_gasto, tipo_gasto)
+    lineas = [
+        f"🧾 *Factura #{fac_id}* — {md(quien)}",
+        f"🏪 {md(data.get('nombre_proveedor') or '?')}",
+        f"🔢 `{md(data.get('ncf') or '?')}`  ·  RNC {md(data.get('rnc') or '?')}",
+        f"💰 RD$ {float(data.get('total_facturado') or 0):,.2f}"
+        f"  ·  ITBIS {float(data.get('itbis') or 0):,.2f}",
+        f"🏷️ {tipo_gasto} — {md(tg_label)}  ·  📆 {md(mes)}",
+    ]
+    if adv:
+        lineas.append("⚠️ " + md(" | ".join(str(a) for a in adv)))
+    return "\n".join(lineas)
+
+
 def _CLEANUP(context):
     """Limpia los datos de la factura/lote activos del contexto."""
     for key in ("pending_invoice", "location", "category", "tipo_gasto",
@@ -1152,6 +1197,12 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
         )
         return S_PHOTO
+
+    await notify_group(
+        context,
+        _aviso_factura(fac_id, data, mes, tipo_gasto, user_label(update)),
+        origen_chat_id=update.effective_chat.id if update.effective_chat else None,
+    )
 
     facturas  = get_facturas(mes)
     total_mes = sum(f["total"] for f in facturas)
@@ -1720,11 +1771,49 @@ def _save_batch_item(context, update, it, reviewed: bool) -> int:
     return fac_id
 
 
-async def _finish_batch(context: ContextTypes.DEFAULT_TYPE) -> str:
+def _aviso_lote(items, months, quien: str, dups: int) -> str:
+    """El texto del aviso de un lote. Una línea por factura, con tope: Telegram
+    corta a 4096 caracteres y un lote puede traer 40."""
+    ok = [it for it in items if it.get("status") == "accepted"]
+    if not ok:
+        return ""
+    TOPE = 25
+    lineas = [f"📦 *Lote de {len(ok)} factura(s)* — {md(quien)}"]
+    total = 0.0
+    for it in ok:
+        d = it["data"]
+        monto = float(d.get("total_facturado") or 0)
+        total += monto
+    for it in ok[:TOPE]:
+        d = it["data"]
+        marca = "⚠️ " if (d.get("_warnings") or d.get("_needs_review")) else ""
+        lineas.append(
+            f"• {marca}{md(d.get('nombre_proveedor') or '?')} · "
+            f"`{md(d.get('ncf') or '?')}` · RD$ {float(d.get('total_facturado') or 0):,.2f}")
+    if len(ok) > TOPE:
+        lineas.append(f"• …y {len(ok) - TOPE} más")
+    lineas.append(f"\n💰 Total RD$ {total:,.2f}  ·  📆 "
+                  + (", ".join(md(mes_label(m)) for m in sorted(months)) if months else "—"))
+    if dups:
+        lineas.append(f"🔁 {dups} duplicada(s) omitida(s)")
+    return "\n".join(lineas)
+
+
+async def _finish_batch(context: ContextTypes.DEFAULT_TYPE,
+                        update: Update | None = None) -> str:
     """Sube a Drive UNA vez por cada mes afectado y arma el resumen. Limpia el estado."""
     months = context.user_data.get("batch_months") or set()
     items  = context.user_data.get("batch_items", [])
     rep    = context.user_data.get("batch_report", {})
+
+    aviso = _aviso_lote(items, months, user_label(update) if update else "",
+                        rep.get("dups", 0))
+    if aviso:
+        await notify_group(
+            context, aviso,
+            origen_chat_id=(update.effective_chat.id
+                            if update and update.effective_chat else None),
+        )
 
     drive_note = ""
     if months and drive_sync.is_configured():
@@ -1792,7 +1881,7 @@ async def batch_accept_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     for it in context.user_data.get("batch_items", []):
         if it.get("status") == "pending":
             _save_batch_item(context, update, it, reviewed=False)
-    summary = await _finish_batch(context)
+    summary = await _finish_batch(context, update)
     await query.edit_message_text(summary, parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -1801,7 +1890,7 @@ async def batch_finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     """🏁 Terminar (cuando ya no hay pendientes)."""
     query = update.callback_query
     await query.answer()
-    summary = await _finish_batch(context)
+    summary = await _finish_batch(context, update)
     await query.edit_message_text(summary, parse_mode="Markdown")
     return ConversationHandler.END
 

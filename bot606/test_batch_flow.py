@@ -397,6 +397,65 @@ async def run():
           and fs["E310009999997"]["revisada_manual"] == 1,
           "revisada: conserva la advertencia pero sale de la cola")
 
+    # ── Escenario H: el grupo espejo ────────────────────────────────────
+    print("\n— Escenario H: aviso al grupo espejo —")
+    GRUPO = "-1009999999999"
+    factura = dict(nombre_proveedor="Bellón S.A.S", ncf="E310001364339",
+                   rnc="102000621", total_facturado=10500.0, itbis=1601.69)
+
+    def avisos_al_grupo():
+        return [p for m, p in fake.calls
+                if m == "sendMessage" and str(p.get("chat_id")) == GRUPO]
+
+    n0 = len(avisos_al_grupo())
+    bot.GROUP_CHAT_ID = ""
+    await bot.notify_group(app, "no debería salir")
+    check(len(avisos_al_grupo()) == n0, "sin GROUP_CHAT_ID no se avisa a nadie")
+
+    bot.GROUP_CHAT_ID = GRUPO
+
+    class _Ctx:
+        bot = tbot
+    await bot.notify_group(_Ctx, "hola grupo")
+    check(len(avisos_al_grupo()) == n0 + 1, "con GROUP_CHAT_ID sí se avisa")
+
+    await bot.notify_group(_Ctx, "eco", origen_chat_id=GRUPO)
+    check(len(avisos_al_grupo()) == n0 + 1,
+          "un mensaje que nace en el grupo no se reenvía al grupo (sin eco)")
+
+    texto = bot._aviso_factura(7, factura, "2026-08", "02", "@Cormurca")
+    check("#7" in texto and "@Cormurca" in texto and "E310001364339" in texto,
+          "el aviso trae id, quién la subió y el NCF")
+    check("10,500.00" in texto, "y el monto formateado")
+
+    con_adv = dict(factura, ncf="E310001364340",
+                   _warnings=["RNC no pasa el dígito verificador"])
+    check("⚠️" in bot._aviso_factura(8, con_adv, "2026-08", "02", "@ricfut"),
+          "las advertencias se ven en el grupo")
+
+    items = [{"status": "accepted", "data": dict(factura, ncf=f"E31000000{i:04d}",
+                                                 total_facturado=100.0)}
+             for i in range(30)]
+    items.append({"status": "discarded", "data": dict(factura)})
+    lote = bot._aviso_lote(items, {"2026-08"}, "@Cormurca", dups=2)
+    check("30 factura(s)" in lote, "el aviso de lote cuenta solo las guardadas")
+    check("…y 5 más" in lote, "y corta la lista en 25 para no pasar el tope de Telegram")
+    check("3,000.00" in lote, "con el total del lote")
+    check("2 duplicada(s)" in lote, "y las duplicadas omitidas")
+    check(bot._aviso_lote([], set(), "@x", 0) == "",
+          "un lote sin nada guardado no avisa")
+
+    # Que un fallo de Telegram no tumbe el guardado
+    class _CtxRoto:
+        class bot:
+            @staticmethod
+            async def send_message(**kw):
+                raise RuntimeError("el bot no está en el grupo")
+    await bot.notify_group(_CtxRoto, "esto explota por dentro")
+    check(True, "si el envío al grupo falla, no se propaga la excepción")
+
+    bot.GROUP_CHAT_ID = ""
+
     await app.shutdown()
 
     print()
