@@ -567,6 +567,81 @@ async def run():
     check([p for m, p in fake.calls[n2:] if m == "sendMessage"],
           "pero /id sí pasa aunque no haya desbloqueado (hace falta para configurar)")
 
+    # ── Escenario K: el archivo de envío de la DGII ─────────────────────
+    print("\n— Escenario K: archivo de envío 606 —")
+
+    def fac(**kw):
+        base = dict(rnc="102000621", ncf="E310001364339", nombre="Bellón",
+                    fecha_comp="2026-08-14", base=1000.0, itbis=180.0,
+                    propina=0.0, total=1180.0, tipo_gasto="02",
+                    metodo="TARJETA_CREDITO")
+        base.update(kw); base["total"] = base["base"] + base["itbis"] + base["propina"]
+        return base
+
+    filas, bloq, avi = bot.preparar_606([fac()], "2026-08")
+    check(not bloq and not avi and len(filas) == 1, "una factura limpia pasa sin ruido")
+    linea = bot.construir_txt_606(filas, "131545157", "202608").decode().splitlines()
+    check(linea[0] == "606|131545157|202608|1", "la cabecera trae RNC, período y conteo")
+    check(linea[1] == "102000621|1|02|E310001364339||20260814|20260814|"
+                      "1000||1000|180|||180|0|||||||0|03",
+          "y la línea sale con el formato exacto de la Herramienta DGII")
+
+    # el tope de la propina: 10% truncado, nunca redondeado
+    f, _, a = bot.preparar_606([fac(base=1292.37, itbis=232.63, propina=129.24,
+                                    tipo_gasto="05")], "2026-08")
+    check(f[0]["propina"] == 129.23, "la propina se trunca al 10% (129.24 → 129.23)")
+    check(any("pasa del 10%" in x for x in a), "y avisa de que la bajó")
+    check(bot.tope_propina(1292.37) == 129.23, "tope_propina trunca, no redondea")
+
+    # propina ⇒ tipo 05
+    f, _, a = bot.preparar_606([fac(propina=50.0, base=500.0, itbis=90.0)], "2026-08")
+    check(f[0]["tipo_gasto"] == "05", "con propina, el tipo pasa a 05")
+
+    # 07 solo para el Banco Santa Cruz
+    f, _, a = bot.preparar_606([fac(tipo_gasto="07")], "2026-08")
+    check(f[0]["tipo_gasto"] == "02", "un 07 que no es del banco se reclasifica a 02")
+    f, _, _ = bot.preparar_606([fac(rnc=bot.RNC_BSC, ncf="E310004470672",
+                                    tipo_gasto="07", itbis=0.0,
+                                    metodo="NOTA_CREDITO")], "2026-08")
+    check(f[0]["forma_pago"] == "06", "el del banco va con forma de pago 06")
+
+    # los financieros al final
+    f, _, _ = bot.preparar_606([
+        fac(rnc=bot.RNC_BSC, ncf="E310004470672", tipo_gasto="07", itbis=0.0),
+        fac(ncf="E310001364340"),
+    ], "2026-08")
+    check([x["tipo_gasto"] for x in f] == ["02", "07"],
+          "los gastos financieros se van al final del archivo")
+
+    # bloqueos: lo que la DGII rechaza seguro
+    _, bloq, _ = bot.preparar_606([fac(rnc="101013814")], "2026-08")
+    check(any("no existe" in b for b in bloq), "un RNC con dígito verificador malo bloquea")
+    _, bloq, _ = bot.preparar_606([fac(ncf="E31000066076")], "2026-08")
+    check(any("mal formado" in b for b in bloq), "un NCF con largo raro bloquea")
+    _, bloq, _ = bot.preparar_606([fac(), fac()], "2026-08")
+    check(any("repetido" in b for b in bloq), "un NCF repetido bloquea")
+    _, bloq, _ = bot.preparar_606([fac(fecha_comp="")], "2026-08")
+    check(any("sin fecha" in b for b in bloq), "sin fecha de comprobante, bloquea")
+
+    # comprobante de otro mes: avisa pero no bloquea
+    _, bloq, a = bot.preparar_606([fac(fecha_comp="2026-07-30")], "2026-08")
+    check(not bloq and any("no de 202608" in x for x in a),
+          "un comprobante de otro mes avisa pero deja pasar")
+
+    # formas de pago
+    check(bot.forma_pago_dgii("EFECTIVO", "02", "102000621") == "01", "efectivo → 01")
+    check(bot.forma_pago_dgii("CHEQUE", "02", "102000621") == "02", "cheque → 02")
+    check(bot.forma_pago_dgii("TRANSFERENCIA", "02", "102000621") == "02",
+          "transferencia → 02")
+    check(bot.forma_pago_dgii("TARJETA_DEBITO", "02", "102000621") == "03",
+          "débito → 03 (no 05: los códigos de Gabi no son los de la DGII)")
+    check(bot.forma_pago_dgii("", "02", "102000621") == "03",
+          "sin método conocido, el default es tarjeta")
+
+    check(bot.fmt_txt_num(724100.0) == "724100" and bot.fmt_txt_num(13033.80) == "13033.8"
+          and bot.fmt_txt_num(0) == "0" and bot.fmt_txt_num(169.49) == "169.49",
+          "los montos van sin ceros de cola, como los escribe la Herramienta")
+
     await app.shutdown()
 
     print()

@@ -119,6 +119,7 @@ CATEGORIES  = ["Casa", "Obra"]
 BTN_NUEVA      = "🧾 Nueva factura"
 BTN_RESUMEN    = "📊 Resumen"
 BTN_EXPORTAR   = "📥 Descargar Excel"
+BTN_DGII       = "📤 Archivo DGII"
 BTN_PENDIENTES = "⚠️ Pendientes"
 BTN_AYUDA      = "❓ Ayuda"
 
@@ -128,6 +129,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         [
             [KeyboardButton(BTN_NUEVA)],
             [KeyboardButton(BTN_RESUMEN), KeyboardButton(BTN_EXPORTAR)],
+            [KeyboardButton(BTN_DGII)],
             [KeyboardButton(BTN_PENDIENTES), KeyboardButton(BTN_AYUDA)],
         ],
         resize_keyboard=True,
@@ -1000,6 +1002,136 @@ def parse_bsc_excel(file_bytes: bytes) -> tuple[list[dict], list[str]]:
     if not salida and not problemas:
         problemas.append("El archivo no traía ninguna fila con NCF.")
     return salida, problemas
+
+
+# ──────────────────────────────────────────────────────────────
+# ARCHIVO DE ENVÍO 606 (el TXT que se sube a la DGII)
+# ──────────────────────────────────────────────────────────────
+# Lo que se le entrega a la DGII es este TXT. La "Herramienta Formato 606" en
+# Excel solo existe para parirlo — y necesita Excel + COM, que aquí no hay.
+# Las reglas son las mismas que usa la skill `romur-606` en la PC, calibradas
+# contra el 606 de julio 2026 que la DGII aceptó.
+
+RE_NCF_OK = re.compile(r"^(B\d{10}|E\d{12})$")
+
+
+def tope_propina(base) -> float:
+    """El 10% del monto facturado, TRUNCADO a 2 decimales.
+
+    La DGII compara contra el valor exacto: con 1292.37 el 10% es 129.237, así
+    que 129.24 la rechaza y 129.23 pasa. Nunca se redondea hacia arriba — eso
+    tumbó la línea 39 del 606 de agosto 2026."""
+    from decimal import Decimal, ROUND_FLOOR
+    return float((Decimal(str(base or 0)) * Decimal("0.10"))
+                 .quantize(Decimal("0.01"), rounding=ROUND_FLOOR))
+
+
+def forma_pago_dgii(metodo: str, tipo_gasto: str, rnc: str) -> str:
+    """Código de forma de pago de la DGII (01..07) a partir del método que
+    guardó el bot. Ojo: los códigos de Gabi NO son los de la DGII."""
+    if tipo_gasto == "07" and rnc == RNC_BSC:
+        return "06"                      # nota de crédito
+    m = (metodo or "").upper()
+    if any(x in m for x in ("NOTA", "CREDITO_NOTA")):       return "06"
+    if any(x in m for x in ("EFECTIVO", "CASH", "METALICO")): return "01"
+    if "CHEQUE" in m:                                        return "02"
+    if any(x in m for x in ("TRANSFER", "DEPOSITO")):        return "02"
+    # ROMUR paga casi todo con tarjeta: ese es el default.
+    return "03"
+
+
+def fmt_txt_num(v) -> str:
+    """Como lo escribe la Herramienta en el TXT: sin ceros de cola."""
+    f = round(float(v or 0), 2)
+    if f == int(f):
+        return str(int(f))
+    return ("%.2f" % f).rstrip("0").rstrip(".")
+
+
+def preparar_606(facturas: list[dict], mes: str) -> tuple[list[dict], list[str], list[str]]:
+    """Convierte las facturas del mes en filas del 606.
+
+    Devuelve (filas, bloqueos, avisos). Un **bloqueo** es algo que la DGII
+    rechaza seguro: mientras haya uno no se genera el archivo. Un **aviso** es
+    algo que el bot arregló solo y conviene que se sepa."""
+    periodo = mes.replace("-", "")
+    bloqueos, avisos, normales, financieros = [], [], [], []
+    vistos = {}
+
+    for f in facturas:
+        rnc = re.sub(r"\D", "", str(f.get("rnc") or ""))
+        ncf = (f.get("ncf") or "").strip().upper()
+        nom = f.get("nombre") or "?"
+        tg  = (f.get("tipo_gasto") or "02")[:2]
+
+        base  = round(float(f.get("base") or 0), 2)
+        itbis = round(float(f.get("itbis") or 0), 2)
+        total = round(float(f.get("total") or 0), 2)
+        prop  = round(float(f.get("propina") or 0), 2)
+        if base == 0 and total > 0:
+            base = round(total - itbis - prop, 2)
+
+        if prop > 0 and tg != "05":
+            avisos.append(f"`{ncf}` {nom}: tiene propina → tipo 05 (venía {tg})")
+            tg = "05"
+        if tg == "07" and rnc != RNC_BSC:
+            avisos.append(f"`{ncf}` {nom}: 07 sin ser del Banco Santa Cruz → tipo 02")
+            tg = "02"
+        tope = tope_propina(base)
+        if prop > tope:
+            avisos.append(f"`{ncf}` {nom}: propina {prop:.2f} pasa del 10% → {tope:.2f}")
+            prop = tope
+
+        if not rnc_valido(rnc):
+            bloqueos.append(f"`{ncf}` {nom}: **RNC {rnc} no existe** (falla el dígito "
+                            f"verificador). Búscalo en una factura anterior del mismo "
+                            f"proveedor — casi siempre es un dígito mal leído.")
+        if not RE_NCF_OK.match(ncf):
+            bloqueos.append(f"`{ncf}` {nom}: **NCF mal formado** ({len(ncf)} caracteres). "
+                            f"Tiene que ser B+10 dígitos o E+12.")
+        if ncf in vistos:
+            bloqueos.append(f"`{ncf}` {nom}: NCF repetido.")
+        vistos[ncf] = True
+
+        fecha = (f.get("fecha_comp") or "")[:10]
+        m_f = re.match(r"(\d{4})-(\d{2})-(\d{2})", fecha)
+        if not m_f:
+            bloqueos.append(f"`{ncf}` {nom}: **sin fecha de comprobante legible**.")
+            continue
+        per, dia = m_f.group(1) + m_f.group(2), int(m_f.group(3))
+        if per != periodo:
+            avisos.append(f"`{ncf}` {nom}: el comprobante es de {per}, no de {periodo}")
+
+        fila = {
+            "rnc": rnc, "nombre": nom, "ncf": ncf,
+            "tipo_id": "2" if len(rnc) == 11 else "1",
+            "tipo_gasto": tg, "periodo": per, "dia": dia,
+            "base": base, "itbis": itbis, "propina": prop,
+            "forma_pago": forma_pago_dgii(f.get("metodo"), tg, rnc),
+        }
+        (financieros if tg == "07" else normales).append(fila)
+
+    # Los del banco van al final: es donde la DGII los quiere.
+    return normales + financieros, bloqueos, avisos
+
+
+def construir_txt_606(filas: list[dict], rnc_declarante: str, periodo: str) -> bytes:
+    """El archivo de envío, tal cual lo escribe la Herramienta de la DGII."""
+    lineas = [f"606|{rnc_declarante}|{periodo}|{len(filas)}"]
+    for r in filas:
+        f8 = f"{r['periodo']}{r['dia']:02d}"
+        lineas.append("|".join([
+            r["rnc"], r["tipo_id"], r["tipo_gasto"], r["ncf"], "",
+            f8, f8,
+            fmt_txt_num(r["base"]), "",                 # servicios | bienes
+            fmt_txt_num(r["base"]), fmt_txt_num(r["itbis"]),
+            "", "",                                     # ITBIS retenido | proporcionalidad
+            fmt_txt_num(r["itbis"]),                    # ITBIS llevado al costo
+            "0",                                        # ITBIS por adelantar
+            "", "", "", "", "", "",
+            fmt_txt_num(r["propina"]), r["forma_pago"],
+        ]))
+    return ("\r\n".join(lineas) + "\r\n").encode("utf-8")
 
 
 async def notify_group(context: ContextTypes.DEFAULT_TYPE, texto: str,
@@ -2465,6 +2597,76 @@ async def on_pick_exportar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _render_exportar(query.message, mes)
 
 
+async def cmd_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update): return
+    kb = mes_picker("dgii")
+    if kb is None:
+        await update.message.reply_text("Aún no hay facturas guardadas.")
+        return
+    await update.message.reply_text(
+        "📤 *Archivo de envío DGII*\n\n"
+        "Reviso el mes con las reglas que la DGII aplica y, si está limpio, "
+        "te mando el archivo listo para subir.\n\n¿Qué mes?",
+        reply_markup=kb, parse_mode="Markdown")
+
+
+async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Revisa el mes y, si no hay bloqueos, manda el TXT de envío."""
+    query = update.callback_query
+    await query.answer()
+    mes = query.data.replace("dgii_", "")
+    await query.edit_message_text(f"🔍 Revisando *{mes}*…", parse_mode="Markdown")
+
+    facturas = get_facturas(mes)
+    if not facturas:
+        await query.message.reply_text(f"Sin facturas para *{mes}*.", parse_mode="Markdown")
+        return
+
+    filas, bloqueos, avisos = preparar_606(facturas, mes)
+
+    if bloqueos:
+        texto = [
+            f"🛑 *{mes} no se puede enviar todavía*",
+            f"_{len(bloqueos)} cosa(s) que la DGII rechaza:_", "",
+        ]
+        texto += [f"{i}. {b}" for i, b in enumerate(bloqueos[:12], 1)]
+        if len(bloqueos) > 12:
+            texto.append(f"…y {len(bloqueos) - 12} más.")
+        texto += ["", "Corrígelas con *⚠️ Pendientes* o /lista y vuelve a pedir el archivo."]
+        await query.message.reply_text("\n".join(texto), parse_mode="Markdown")
+        return
+
+    periodo = mes.replace("-", "")
+    txt = construir_txt_606(filas, CONSUMER_RNC, periodo)
+    total_base  = sum(r["base"] for r in filas)
+    total_itbis = sum(r["itbis"] for r in filas)
+    por_tipo = {}
+    for r in filas:
+        por_tipo[r["tipo_gasto"]] = por_tipo.get(r["tipo_gasto"], 0) + 1
+
+    caption = (
+        f"✅ {len(filas)} registros · {mes}\n"
+        f"Servicios RD$ {total_base:,.2f} · ITBIS RD$ {total_itbis:,.2f}\n"
+        f"Tipos: " + " · ".join(f"{t}×{n}" for t, n in sorted(por_tipo.items()))
+    )
+    await query.message.reply_document(
+        document=io.BytesIO(txt),
+        filename=f"DGII_F_606_{CONSUMER_RNC}_{periodo}.TXT",
+        caption=caption,
+    )
+
+    if avisos:
+        texto = [f"ℹ️ *Ajusté {len(avisos)} cosa(s) por ti:*", ""]
+        texto += [f"• {a}" for a in avisos[:12]]
+        if len(avisos) > 12:
+            texto.append(f"• …y {len(avisos) - 12} más.")
+        await query.message.reply_text("\n".join(texto), parse_mode="Markdown")
+
+    await query.message.reply_text(
+        "👆 Ese es el archivo que se sube a la Oficina Virtual de la DGII.",
+    )
+
+
 async def cmd_borrar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
     mes = get_mes(context)
@@ -2761,10 +2963,12 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("mes",        cmd_mes))
     app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
     app.add_handler(CommandHandler("id",         cmd_id))
+    app.add_handler(CommandHandler("dgii",       cmd_dgii))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$"),    cmd_resumen))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_EXPORTAR)}$"),   cmd_exportar))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DGII)}$"),       cmd_dgii))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_PENDIENTES)}$"), cmd_pendientes))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AYUDA)}$"),      cmd_ayuda))
 
@@ -2779,6 +2983,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CallbackQueryHandler(on_pick_resfilter, pattern="^resfilter_"))
     app.add_handler(CallbackQueryHandler(on_pick_resumen,   pattern="^res_"))
     app.add_handler(CallbackQueryHandler(on_pick_exportar,  pattern="^exp_"))
+    app.add_handler(CallbackQueryHandler(on_pick_dgii,      pattern="^dgii_"))
 
     app.add_error_handler(on_error)
 
