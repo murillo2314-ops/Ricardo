@@ -223,6 +223,14 @@ def init_db():
             conn.execute("ALTER TABLE facturas ADD COLUMN usuario TEXT")
         if "tipo_gasto" not in cols:
             conn.execute("ALTER TABLE facturas ADD COLUMN tipo_gasto TEXT DEFAULT '02'")
+        if "file_id" not in cols:
+            # El file_id de Telegram: deja reenviar la MISMA foto a otro chat
+            # sin volver a subirla y sin guardar la imagen en ningun sitio.
+            # Antes el bot no conservaba nada y, cuando la DGII rechazaba una
+            # linea, habia que ir a buscar la foto a mano por el chat.
+            conn.execute("ALTER TABLE facturas ADD COLUMN file_id TEXT")
+        if "file_tipo" not in cols:
+            conn.execute("ALTER TABLE facturas ADD COLUMN file_tipo TEXT")
         if "revisada_manual" not in cols:
             # 1 = un humano abrió y confirmó la factura → ya no cuenta como pendiente,
             # aunque tenga advertencias. Se usa para que "corregidas ≠ pendientes".
@@ -274,8 +282,8 @@ def save_factura(mes: str, location: str, category: str, data: dict,
                    fecha_comp, fecha_pago, total, itbis, base, propina,
                    metodo, tipo_cf, observaciones, qr_verified,
                    nivel_confianza, advertencias, needs_review, raw_json, usuario,
-                   tipo_gasto, revisada_manual)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   tipo_gasto, revisada_manual, file_id, file_tipo)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 mes, location, category,
                 data.get("_filename", ""),
@@ -299,6 +307,8 @@ def save_factura(mes: str, location: str, category: str, data: dict,
                 usuario,
                 tipo_gasto,
                 1 if reviewed else 0,
+                data.get("_file_id"),
+                data.get("_file_tipo"),
             ))
             conn.commit()
             return cur.lastrowid
@@ -1161,7 +1171,7 @@ def preparar_606(facturas: list[dict], mes: str) -> tuple[list[dict], list[str],
             bloqueos.append(
                 f"*{md(nom)}* — NCF `{ncf}` mal formado ({len(ncf)} caracteres; "
                 f"tiene que ser B+10 dígitos o E+12). Hay que leerlo de la foto:\n"
-                f"   `/arreglar {ncf} ncf <el bueno>`")
+                f"   `/foto {ncf}` para verla  ·  `/arreglar {ncf} ncf <el bueno>`")
         if ncf in vistos:
             bloqueos.append(f"`{ncf}` {nom}: NCF repetido.")
         vistos[ncf] = True
@@ -1205,6 +1215,35 @@ def construir_txt_606(filas: list[dict], rnc_declarante: str, periodo: str) -> b
             fmt_txt_num(r["propina"]), r["forma_pago"],
         ]))
     return ("\r\n".join(lineas) + "\r\n").encode("utf-8")
+
+
+async def notify_group_foto(context: ContextTypes.DEFAULT_TYPE, texto: str,
+                            file_id: str | None, file_tipo: str | None,
+                            origen_chat_id=None) -> None:
+    """Aviso al grupo **con la factura adjunta**.
+
+    Telegram deja reenviar un `file_id` a otro chat sin volver a subir el
+    archivo, así que la foto llega al grupo sin que el bot guarde ninguna
+    imagen. Si no hay archivo —o Telegram lo rechaza— se manda solo el texto:
+    el aviso nunca se pierde por culpa de la foto."""
+    if not GROUP_CHAT_ID:
+        return
+    if origen_chat_id is not None and str(origen_chat_id) == GROUP_CHAT_ID:
+        return
+    if file_id:
+        # El caption de Telegram corta en 1024 caracteres.
+        cap = texto if len(texto) <= 1024 else texto[:1015] + "…"
+        try:
+            enviar = (context.bot.send_document if file_tipo == "document"
+                      else context.bot.send_photo)
+            campo = "document" if file_tipo == "document" else "photo"
+            await enviar(chat_id=GROUP_CHAT_ID, caption=cap,
+                         parse_mode="Markdown", disable_notification=True,
+                         **{campo: file_id})
+            return
+        except Exception as e:
+            log.error("No pude mandar la factura al grupo (%s): %s", file_tipo, e)
+    await notify_group(context, texto, origen_chat_id)
 
 
 async def notify_group(context: ContextTypes.DEFAULT_TYPE, texto: str,
@@ -1343,6 +1382,7 @@ async def _process_photo(reply_to, context: ContextTypes.DEFAULT_TYPE, file_id: 
     buf  = io.BytesIO()
     await file.download_to_memory(buf)
     data = await extract_invoice(buf.getvalue(), f"{file_id}.jpg")
+    data["_file_id"], data["_file_tipo"] = file_id, "photo"
     await proc.delete()
 
     if data.get("_error"):
@@ -1516,9 +1556,10 @@ async def confirm_accept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return S_PHOTO
 
-    await notify_group(
+    await notify_group_foto(
         context,
         _aviso_factura(fac_id, data, mes, tipo_gasto, user_label(update)),
+        data.get("_file_id"), data.get("_file_tipo"),
         origen_chat_id=update.effective_chat.id if update.effective_chat else None,
     )
 
@@ -1909,7 +1950,7 @@ async def batch_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f = await context.bot.get_file(fid)
             buf = io.BytesIO()
             await f.download_to_memory(buf)
-            images.append((buf.getvalue(), f"foto_{i+1}.jpg"))
+            images.append((buf.getvalue(), f"foto_{i+1}.jpg", fid, "photo"))
         except Exception as e:
             log.error("Descarga de foto %s falló: %s", fid, e)
     await _process_batch_images(images, context, status)
@@ -1938,7 +1979,8 @@ async def _run_pdf_batch(status_msg, context: ContextTypes.DEFAULT_TYPE) -> int:
     if len(pages) >= 40:
         context.user_data["batch_truncado"] = len(pages)
 
-    images = [(pg, f"pdf_p{i+1}.jpg") for i, pg in enumerate(pages)]
+    pdf_id = context.user_data["batch_pdf_file_id"]
+    images = [(pg, f"pdf_p{i+1}.jpg", pdf_id, "document") for i, pg in enumerate(pages)]
     await _process_batch_images(images, context, status_msg)
     return await _show_batch_list(status_msg, context)
 
@@ -1950,7 +1992,7 @@ async def _process_batch_images(images, context: ContextTypes.DEFAULT_TYPE, stat
     sem = asyncio.Semaphore(5)
     done = 0
 
-    async def one(img_bytes, fn):
+    async def one(img_bytes, fn, fid=None, ftipo=None):
         nonlocal done
         async with sem:
             data = await extract_invoice(img_bytes, fn)
@@ -1960,9 +2002,10 @@ async def _process_batch_images(images, context: ContextTypes.DEFAULT_TYPE, stat
                 await status_msg.edit_text(f"⏳ Procesando {done}/{total} facturas…")
             except Exception:
                 pass
+        data["_file_id"], data["_file_tipo"] = fid, ftipo
         return data
 
-    results = await asyncio.gather(*[one(b, fn) for b, fn in images])
+    results = await asyncio.gather(*[one(*img) for img in images])
 
     items = []
     seen_ncf = set()
@@ -2126,12 +2169,28 @@ async def _finish_batch(context: ContextTypes.DEFAULT_TYPE,
 
     aviso = _aviso_lote(items, months, user_label(update) if update else "",
                         rep.get("dups", 0))
+    origen = (update.effective_chat.id
+              if update and update.effective_chat else None)
     if aviso:
-        await notify_group(
-            context, aviso,
-            origen_chat_id=(update.effective_chat.id
-                            if update and update.effective_chat else None),
-        )
+        await notify_group(context, aviso, origen_chat_id=origen)
+        # Y detrás, las facturas. Con tope: en un lote de 40 mandar 40
+        # mensajes al grupo es peor que no mandar ninguno.
+        TOPE_FOTOS = 12
+        conf = [it for it in items
+                if it.get("status") == "accepted" and it["data"].get("_file_id")]
+        for it in conf[:TOPE_FOTOS]:
+            d = it["data"]
+            await notify_group_foto(
+                context,
+                f"🧾 {md(d.get('nombre_proveedor') or '?')} · "
+                f"`{md(d.get('ncf') or '?')}` · "
+                f"RD$ {float(d.get('total_facturado') or 0):,.2f}",
+                d.get("_file_id"), d.get("_file_tipo"), origen_chat_id=origen)
+        if len(conf) > TOPE_FOTOS:
+            await notify_group(
+                context,
+                f"_…y {len(conf) - TOPE_FOTOS} factura(s) más del lote, sin foto "
+                f"para no llenar el grupo._", origen_chat_id=origen)
 
     drive_note = ""
     if months and drive_sync.is_configured():
@@ -2293,7 +2352,7 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
         f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
         f"Mándamelo tal cual y lo cargo completo.\n\n"
-        f"_Avanzado:_ /lista  /arreglar  /grupo  /borrar  /mes YYYY-MM",
+        f"_Avanzado:_ /lista  /foto  /arreglar  /grupo  /borrar  /mes YYYY-MM",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -2761,6 +2820,56 @@ async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """`/foto <NCF>` — devuelve la imagen de una factura ya guardada.
+
+    Es lo que faltó en agosto: la DGII rechazó dos líneas y la única forma de
+    ver el comprobante era rebuscar en el chat de Telegram por fecha."""
+    if not is_allowed(update): return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "📷 *Ver la foto de una factura*\n\n`/foto <NCF>`\n\n"
+            "_Ejemplo:_ `/foto E310001364339`\n"
+            "El NCF sale en /lista y en los avisos del grupo.",
+            parse_mode="Markdown")
+        return
+
+    ncf = clean_ncf(args[0])
+    with get_db() as conn:
+        f = conn.execute("SELECT * FROM facturas WHERE ncf=?", (ncf,)).fetchone()
+    if not f:
+        await update.message.reply_text(
+            f"No encuentro ninguna factura con NCF `{md(ncf)}`.", parse_mode="Markdown")
+        return
+
+    f = dict(f)
+    if not f.get("file_id"):
+        await update.message.reply_text(
+            f"🗂️ *{md(f.get('nombre') or '?')}* · `{md(ncf)}`\n"
+            f"RD$ {float(f.get('total') or 0):,.2f} · {md(f.get('fecha_comp') or '?')}\n\n"
+            f"_De esta no tengo la imagen: se subió antes de que el bot "
+            f"empezara a guardarlas. Está en el chat de Telegram de esa fecha._",
+            parse_mode="Markdown")
+        return
+
+    cap = (f"🧾 *{md(f.get('nombre') or '?')}*\n"
+           f"`{md(ncf)}` · RNC {md(f.get('rnc') or '?')}\n"
+           f"RD$ {float(f.get('total') or 0):,.2f} · {md(f.get('fecha_comp') or '?')}"
+           f" · subió {md(f.get('usuario') or '?')}")
+    try:
+        if f.get("file_tipo") == "document":
+            await update.message.reply_document(document=f["file_id"], caption=cap,
+                                                parse_mode="Markdown")
+        else:
+            await update.message.reply_photo(photo=f["file_id"], caption=cap,
+                                             parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Telegram no me devuelve el archivo: _{md(e)}_\n\n"
+            f"Puede que sea muy viejo.", parse_mode="Markdown")
+
+
 async def cmd_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Diagnóstico del grupo espejo.
 
@@ -3171,6 +3280,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("dgii",       cmd_dgii, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("arreglar",   cmd_arreglar, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("grupo",      cmd_grupo, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("foto",       cmd_foto, filters=filters.ChatType.PRIVATE))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$") & filters.ChatType.PRIVATE,    cmd_resumen))

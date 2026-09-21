@@ -745,6 +745,78 @@ async def run():
               "E310002492799", "ncf", "E310002492714"),
           "y no deja crear un NCF duplicado al corregir")
 
+    # -- Escenario M: la factura llega al grupo con la foto --------------
+    print("\n-- Escenario M: la foto de la factura en el grupo --")
+    GRUPO2 = "-1009999999999"
+    bot.GROUP_CHAT_ID = GRUPO2
+
+    class _Ctx2:
+        bot = tbot
+
+    n0 = len(fake.calls)
+    await bot.notify_group_foto(_Ctx2, "hola", "AgACFAKEPHOTO", "photo")
+    envios = fake.calls[n0:]
+    check(any(m == "sendPhoto" for m, _ in envios),
+          "con file_id de foto, el aviso va como FOTO, no como texto")
+    p = [pp for m, pp in envios if m == "sendPhoto"][0]
+    check(p.get("photo") == "AgACFAKEPHOTO" and p.get("caption") == "hola",
+          "reenvia el mismo file_id y mete el aviso en el caption")
+
+    n1 = len(fake.calls)
+    await bot.notify_group_foto(_Ctx2, "un pdf", "BQACFAKEPDF", "document")
+    check(any(m == "sendDocument" for m, _ in fake.calls[n1:]),
+          "un lote de PDF se manda como documento")
+
+    n2 = len(fake.calls)
+    await bot.notify_group_foto(_Ctx2, "sin archivo", None, None)
+    check(any(m == "sendMessage" for m, _ in fake.calls[n2:]),
+          "sin file_id cae a texto y el aviso no se pierde")
+
+    largo = "x" * 1500
+    n3 = len(fake.calls)
+    await bot.notify_group_foto(_Ctx2, largo, "AgACFAKEPHOTO", "photo")
+    cap = [pp for m, pp in fake.calls[n3:] if m == "sendPhoto"][0]["caption"]
+    check(len(cap) <= 1024, "el caption se recorta al tope de 1024 de Telegram")
+
+    # si Telegram rechaza la foto, el aviso tiene que salir igual como texto
+    class _CtxFoto:
+        class bot:
+            enviados = []
+            @staticmethod
+            async def send_photo(**kw):
+                raise RuntimeError("file_id invalido")
+            @staticmethod
+            async def send_message(**kw):
+                _CtxFoto.bot.enviados.append(kw)
+    await bot.notify_group_foto(_CtxFoto, "texto de respaldo", "ROTO", "photo")
+    check(_CtxFoto.bot.enviados and "respaldo" in _CtxFoto.bot.enviados[0]["text"],
+          "si Telegram rechaza la foto, el aviso sale igual como texto")
+
+    # el file_id se guarda y se recupera
+    bot.save_factura("2026-09", "Punta Cana", "Obra",
+                     dict(rnc="102000621", ncf="E310009000001",
+                          nombre_proveedor="FerreUniverso",
+                          fecha_comprobante="2026-09-05",
+                          monto_sin_itbis=100.0, itbis=18.0,
+                          total_facturado=118.0,
+                          _file_id="AgACGUARDADA", _file_tipo="photo"),
+                     "@Cormurca", "02", reviewed=True)
+    g = {f["ncf"]: f for f in bot.get_facturas("2026-09")}
+    check(g["E310009000001"]["file_id"] == "AgACGUARDADA",
+          "el file_id queda guardado con la factura")
+    check(g["E310009000001"]["file_tipo"] == "photo", "y de que tipo era")
+
+    bot.save_factura("2026-09", "Punta Cana", "Obra",
+                     dict(rnc="102000621", ncf="E310009000002",
+                          nombre_proveedor="Vieja", fecha_comprobante="2026-09-06",
+                          monto_sin_itbis=10.0, itbis=0.0, total_facturado=10.0),
+                     "@ricfut", "02", reviewed=True)
+    g = {f["ncf"]: f for f in bot.get_facturas("2026-09")}
+    check(g["E310009000002"]["file_id"] is None,
+          "una factura sin foto guarda file_id vacio, no revienta")
+
+    bot.GROUP_CHAT_ID = ""
+
     await app.shutdown()
 
     print()
