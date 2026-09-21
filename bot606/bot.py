@@ -2352,7 +2352,7 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
         f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
         f"Mándamelo tal cual y lo cargo completo.\n\n"
-        f"_Avanzado:_ /lista  /foto  /arreglar  /grupo  /borrar  /mes YYYY-MM",
+        f"_Avanzado:_ /lista  /foto  /arreglar  /grupo  /acceso  /borrar  /mes YYYY-MM",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -2820,6 +2820,37 @@ async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_acceso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quién puede usar el bot.
+
+    `ALLOWED_USERS` falla en silencio a propósito —a quien no está en la lista
+    el bot no le contesta nada, ni le pide la contraseña— así que un dígito
+    mal escrito deja a alguien fuera sin que nadie se entere. Esto lo enseña.
+    Los IDs de Telegram no son secretos: son los que uno se pasa para
+    configurar."""
+    if not is_allowed(update): return
+    yo = update.effective_user.id
+
+    if not ALLOWED_USERS:
+        await update.message.reply_text(
+            "🟠 *La lista de usuarios está vacía.*\n\n"
+            "Ahora mismo entra cualquiera que sepa la contraseña. Pon en "
+            "Railway la variable `ALLOWED_USERS` con los IDs separados por "
+            "coma, sin espacios.\n\n"
+            f"El tuyo es `{yo}`.",
+            parse_mode="Markdown")
+        return
+
+    lineas = [f"🔒 *{len(ALLOWED_USERS)} usuario(s) con acceso:*", ""]
+    for uid in sorted(ALLOWED_USERS):
+        marca = "  ← tú" if uid == yo else ""
+        lineas.append(f"• `{uid}`{marca}")
+    lineas += ["", "_Si el ID de alguien no está en esta lista, el bot no le "
+                   "contesta nada — ni le pide la contraseña. Que cada uno "
+                   "compruebe el suyo con_ `/id` _en su chat privado._"]
+    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+
+
 async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """`/foto <NCF>` — devuelve la imagen de una factura ya guardada.
 
@@ -3281,6 +3312,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("arreglar",   cmd_arreglar, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("grupo",      cmd_grupo, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("foto",       cmd_foto, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("acceso",     cmd_acceso, filters=filters.ChatType.PRIVATE))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$") & filters.ChatType.PRIVATE,    cmd_resumen))
