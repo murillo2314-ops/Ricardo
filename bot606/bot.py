@@ -45,6 +45,7 @@ from telegram import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     Update,
 )
 from telegram.ext import (
@@ -2184,6 +2185,21 @@ async def batch_conf_back(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        newly_unlocked: bool = False):
     """Pantalla de bienvenida. Si newly_unlocked=True muestra el mensaje de acceso concedido."""
+    chat = update.effective_chat
+
+    # En un grupo NO se manda el menú: un ReplyKeyboardMarkup se le pega al
+    # chat y le sale a todo el mundo, y aquí los botones no sirven de nada
+    # porque la captura es 1:1. Se aprovecha para quitar el que haya quedado.
+    if chat is not None and chat.type in ("group", "supergroup"):
+        await update.message.reply_text(
+            "🪞 Aquí solo *aviso* de las facturas que se van guardando.\n\n"
+            "Para subir una, escríbeme por privado — los botones y las tarjetas "
+            "de revisión solo funcionan ahí.",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
     mes = get_mes(context)
     if newly_unlocked:
         header = (
@@ -2199,7 +2215,8 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"👇 Usa los *botones de abajo* — no hace falta escribir nada:\n\n"
         f"🧾 *Nueva factura* — o envía directamente una foto\n"
         f"📊 *Resumen* — desglose de facturas por mes\n"
-        f"📥 *Descargar Excel* — archivo 606 listo para entregar\n"
+        f"📥 *Descargar Excel* — la hoja de trabajo del mes\n"
+        f"📤 *Archivo DGII* — revisa el mes y te da el archivo de envío\n"
         f"⚠️ *Pendientes* — facturas con advertencias\n"
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
         f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
@@ -2883,8 +2900,8 @@ def build_application(bot=None) -> Application:
     # Conversation handler for the guided capture flow
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("nueva", start_flow),
-            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
+            CommandHandler("nueva", start_flow, filters=filters.ChatType.PRIVATE),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$") & filters.ChatType.PRIVATE, start_flow),
             MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, start_flow),
             MessageHandler(filters.Document.PDF & filters.ChatType.PRIVATE, start_flow),
         ],
@@ -2940,7 +2957,7 @@ def build_application(bot=None) -> Application:
         },
         fallbacks=[
             CommandHandler("cancelar", conv_cancel),
-            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$"), start_flow),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_NUEVA)}$") & filters.ChatType.PRIVATE, start_flow),
         ],
         allow_reentry=True,
         per_user=True,
@@ -2955,22 +2972,22 @@ def build_application(bot=None) -> Application:
 
     # Standalone commands (outside conversation)
     app.add_handler(CommandHandler("start",      cmd_start))
-    app.add_handler(CommandHandler("resumen",    cmd_resumen))
-    app.add_handler(CommandHandler("lista",      cmd_lista))
-    app.add_handler(CommandHandler("pendientes", cmd_pendientes))
-    app.add_handler(CommandHandler("exportar",   cmd_exportar))
-    app.add_handler(CommandHandler("borrar",     cmd_borrar))
-    app.add_handler(CommandHandler("mes",        cmd_mes))
+    app.add_handler(CommandHandler("resumen",    cmd_resumen, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("lista",      cmd_lista, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("pendientes", cmd_pendientes, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("exportar",   cmd_exportar, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("borrar",     cmd_borrar, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("mes",        cmd_mes, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
     app.add_handler(CommandHandler("id",         cmd_id))
-    app.add_handler(CommandHandler("dgii",       cmd_dgii))
+    app.add_handler(CommandHandler("dgii",       cmd_dgii, filters=filters.ChatType.PRIVATE))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$"),    cmd_resumen))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_EXPORTAR)}$"),   cmd_exportar))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DGII)}$"),       cmd_dgii))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_PENDIENTES)}$"), cmd_pendientes))
-    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AYUDA)}$"),      cmd_ayuda))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$") & filters.ChatType.PRIVATE,    cmd_resumen))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_EXPORTAR)}$") & filters.ChatType.PRIVATE,   cmd_exportar))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DGII)}$") & filters.ChatType.PRIVATE,       cmd_dgii))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_PENDIENTES)}$") & filters.ChatType.PRIVATE, cmd_pendientes))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AYUDA)}$") & filters.ChatType.PRIVATE,      cmd_ayuda))
 
     # Reporte de comprobantes del Banco Santa Cruz (.xlsx). Va fuera de la
     # conversación: son cargos bancarios, no facturas que haya que clasificar.

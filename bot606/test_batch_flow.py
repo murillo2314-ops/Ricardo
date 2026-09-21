@@ -567,6 +567,43 @@ async def run():
     check([p for m, p in fake.calls[n2:] if m == "sendMessage"],
           "pero /id sí pasa aunque no haya desbloqueado (hace falta para configurar)")
 
+    # El menú es un ReplyKeyboardMarkup: se le pega al chat y le sale a TODOS.
+    # En un grupo no debe aparecer nunca.
+    n3 = len(fake.calls)
+    await drive(upd_grupo("/start"))
+    envios = [p for m, p in fake.calls[n3:] if m == "sendMessage"]
+    check(len(envios) == 1, "/start en el grupo contesta una sola vez")
+    rm = str(envios[0].get("reply_markup", ""))
+    check(bot.BTN_NUEVA not in rm and bot.BTN_DGII not in rm,
+          "y NO manda el menú de botones al grupo")
+    check("remove_keyboard" in rm,
+          "sino que quita el que hubiera quedado pegado")
+    check("privado" in envios[0]["text"],
+          "y explica que para subir facturas hay que escribirle por privado")
+
+    for texto in (bot.BTN_RESUMEN, bot.BTN_EXPORTAR, bot.BTN_DGII,
+                  bot.BTN_PENDIENTES, bot.BTN_NUEVA):
+        n4 = len(fake.calls)
+        await drive(upd_grupo(texto))
+        check(not [p for m, p in fake.calls[n4:] if m == "sendMessage"],
+              f"el botón «{texto}» escrito en el grupo no hace nada")
+
+    n5 = len(fake.calls)
+    await drive(upd_grupo("/resumen"))
+    check(not [p for m, p in fake.calls[n5:] if m == "sendMessage"],
+          "/resumen no vuelca datos fiscales en el grupo")
+
+    # y en privado todo sigue igual
+    n6 = len(fake.calls)
+    cmd = upd_text("/start")
+    cmd["message"]["entities"] = [{"type": "bot_command", "offset": 0, "length": 6}]
+    await drive(cmd)
+    envios = [p for m, p in fake.calls[n6:] if m == "sendMessage"]
+    rm = str(envios[0].get("reply_markup", "")) if envios else ""
+    check(bot.BTN_NUEVA in rm, "en privado el menú sí sale")
+    check(envios and "Archivo DGII" in envios[0]["text"],
+          "y el menú menciona el botón del archivo DGII")
+
     # ── Escenario K: el archivo de envío de la DGII ─────────────────────
     print("\n— Escenario K: archivo de envío 606 —")
 
