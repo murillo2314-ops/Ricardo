@@ -2770,13 +2770,29 @@ async def cmd_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update): return
 
     if not GROUP_CHAT_ID:
+        # Un nombre mal escrito es la causa más común y la más difícil de ver:
+        # la variable está ahí, pero el bot busca otra. Se listan los NOMBRES
+        # parecidos que sí llegaron (nunca los valores: hay secretos al lado).
+        parecidas = sorted(k for k in os.environ
+                           if ("GROUP" in k.upper() or "CHAT" in k.upper())
+                           and k != "GROUP_CHAT_ID")
+        pista = ""
+        if parecidas:
+            pista = ("\n\n🔎 El bot sí recibió estas, con nombres parecidos:\n"
+                     + "\n".join(f"• `{md(k)}`" for k in parecidas)
+                     + "\n\nSi el ID está en una de ellas, el nombre está mal "
+                       "escrito: tiene que ser exactamente `GROUP_CHAT_ID`.")
+        else:
+            pista = ("\n\n🔎 Al bot no le llegó ninguna variable con «GROUP» o "
+                     "«CHAT» en el nombre. O no se guardó, o Railway dejó el "
+                     "cambio **en cola**: mira si arriba tienes un botón "
+                     "*Apply changes* / *Deploy* sin pulsar.")
         await update.message.reply_text(
             "🔴 *No hay grupo configurado.*\n\n"
-            "La variable `GROUP_CHAT_ID` está vacía, así que el bot no avisa a "
-            "ningún sitio. Es lo que está pasando.\n\n"
-            "Ponla en Railway → *Variables*, con el ID del grupo (va **negativo**). "
-            "Para sacarlo, escribe `/id` dentro del grupo.\n\n"
-            "Railway redespliega solo al guardar.",
+            "El bot arrancó sin `GROUP_CHAT_ID`, así que no avisa a ningún sitio."
+            + pista +
+            "\n\nEl valor es el ID del grupo y va **negativo** (`/id` dentro del "
+            "grupo te lo da).",
             parse_mode="Markdown")
         return
 
