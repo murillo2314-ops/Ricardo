@@ -685,6 +685,66 @@ async def run():
           and bot.fmt_txt_num(0) == "0" and bot.fmt_txt_num(169.49) == "169.49",
           "los montos van sin ceros de cola, como los escribe la Herramienta")
 
+    # ── Escenario L: arreglar una factura ya guardada ───────────────────
+    print("\n— Escenario L: /arreglar y la sugerencia de RNC —")
+
+    # historial: el proveedor aparece varias veces con el RNC bueno
+    for i, ncf in enumerate(["E310000700001", "E310000700002", "E310000700003"]):
+        bot.save_factura("2026-05", "Punta Cana", "Obra",
+                         dict(rnc="101013834", ncf=ncf,
+                              nombre_proveedor="ALMACENES UNIDOS S.A.S.",
+                              fecha_comprobante="2026-05-10",
+                              monto_sin_itbis=100.0, itbis=18.0,
+                              total_facturado=118.0),
+                         "@ricfut", "02", reviewed=True)
+    sug = bot.sugerir_rnc("Almacenes Unidos SRL", "101013814")
+    check(sug is not None and sug[0] == "101013834" and sug[1] == 3,
+          "encuentra el RNC bueno en el historial pese al cambio de razón social")
+    check(bot.sugerir_rnc("PROVEEDOR QUE NO EXISTE", "101013814") is None,
+          "y no inventa nada si el proveedor no está")
+    check(bot._clave_nombre("BELLÓN, S.A.S.") == bot._clave_nombre("Bellon SAS"),
+          "normaliza tildes y razón social para comparar nombres")
+
+    # el bloqueo trae el comando ya escrito
+    malo = fac(rnc="101013814", ncf="E310002492714", nombre="ALMACENES UNIDOS S.A.S.")
+    _, bloq, _ = bot.preparar_606([malo], "2026-08")
+    check(len(bloq) == 1 and "/arreglar E310002492714 rnc 101013834" in bloq[0],
+          "el bloqueo trae el comando de arreglo con el RNC sugerido")
+
+    # y arreglarlo de verdad
+    bot.save_factura("2026-08", "Punta Cana", "Obra",
+                     dict(rnc="101013814", ncf="E310002492714",
+                          nombre_proveedor="ALMACENES UNIDOS S.A.S.",
+                          fecha_comprobante="2026-08-01",
+                          monto_sin_itbis=308.47, itbis=55.52,
+                          total_facturado=363.99),
+                     "@Cormurca", "02", reviewed=True)
+    check(bot.actualizar_factura("E310002492714", "rnc", "101013834") == "",
+          "/arreglar corrige el RNC de una factura ya guardada")
+    g = {f["ncf"]: f for f in bot.get_facturas("2026-08")}
+    check(g["E310002492714"]["rnc"] == "101013834", "y queda guardado")
+
+    check("dígito verificador" in bot.actualizar_factura(
+              "E310002492714", "rnc", "101013814"),
+          "no deja poner un RNC que tampoco existe")
+    check("forma de NCF" in bot.actualizar_factura(
+              "E310002492714", "ncf", "E3100024927"),
+          "ni un NCF mal formado")
+    check("No encuentro" in bot.actualizar_factura(
+              "E999999999999", "rnc", "101013834"),
+          "avisa si el NCF no existe")
+    check("Solo se puede" in bot.actualizar_factura(
+              "E310002492714", "monto", "5"),
+          "y solo admite rnc o ncf")
+    bot.save_factura("2026-08", "Punta Cana", "Obra",
+                     dict(rnc="101013834", ncf="E310002492799",
+                          nombre_proveedor="OTRO", fecha_comprobante="2026-08-02",
+                          monto_sin_itbis=10.0, itbis=0.0, total_facturado=10.0),
+                     "@ricfut", "02", reviewed=True)
+    check("Ya hay otra factura" in bot.actualizar_factura(
+              "E310002492799", "ncf", "E310002492714"),
+          "y no deja crear un NCF duplicado al corregir")
+
     await app.shutdown()
 
     print()

@@ -1049,6 +1049,67 @@ def fmt_txt_num(v) -> str:
     return ("%.2f" % f).rstrip("0").rstrip(".")
 
 
+def _clave_nombre(s: str) -> str:
+    """Nombre de proveedor reducido a lo comparable: sin tildes, sin razón
+    social, sin puntuación. 'BELLÓN, S.A.S.' y 'Bellon SAS' caen en la misma."""
+    s = unicodedata.normalize("NFKD", str(s or "").upper())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"\b(S\.?A\.?S?|SRL|S\.?R\.?L|C\.?POR\.?A|EIRL|INC|CORP)\b", " ", s)
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    return " ".join(s.split())
+
+
+def sugerir_rnc(nombre: str, rnc_malo: str) -> tuple[str, int] | None:
+    """Busca el RNC bueno de ese proveedor en el historial.
+
+    Es como se resolvieron Bellón (jul-2026), Almacenes Unidos y Sirena
+    (ago-2026): el RNC malo no existe —falla el dígito verificador— y el bueno
+    aparece decenas de veces en meses anteriores con el mismo proveedor. No
+    hace falta la foto."""
+    clave = _clave_nombre(nombre)
+    if not clave:
+        return None
+    with get_db() as conn:
+        rows = conn.execute("SELECT nombre, rnc FROM facturas").fetchall()
+    cuenta: dict[str, int] = {}
+    for r in rows:
+        if _clave_nombre(r["nombre"]) != clave:
+            continue
+        rnc = re.sub(r"\D", "", str(r["rnc"] or ""))
+        if rnc and rnc != rnc_malo and rnc_valido(rnc):
+            cuenta[rnc] = cuenta.get(rnc, 0) + 1
+    if not cuenta:
+        return None
+    mejor = max(cuenta.items(), key=lambda kv: kv[1])
+    return mejor if mejor[1] >= 2 else None
+
+
+def actualizar_factura(ncf_actual: str, campo: str, valor: str) -> str:
+    """Corrige el RNC o el NCF de una factura ya guardada.
+
+    Devuelve "" si salió bien, o el motivo del fallo. Un error de la DGII se
+    arregla aquí, no borrando y volviendo a fotografiar."""
+    if campo not in ("rnc", "ncf"):
+        return "Solo se puede corregir `rnc` o `ncf`."
+    valor = valor.strip().upper() if campo == "ncf" else re.sub(r"\D", "", valor)
+    if campo == "rnc" and not rnc_valido(valor):
+        return f"`{valor}` tampoco pasa el dígito verificador de la DGII."
+    if campo == "ncf" and not RE_NCF_OK.match(valor):
+        return f"`{valor}` no tiene forma de NCF (B+10 dígitos o E+12)."
+    with get_db() as conn:
+        fila = conn.execute("SELECT id FROM facturas WHERE ncf=?",
+                            (ncf_actual,)).fetchone()
+        if not fila:
+            return f"No encuentro ninguna factura con NCF `{ncf_actual}`."
+        if campo == "ncf":
+            otra = conn.execute("SELECT id FROM facturas WHERE ncf=?",
+                                (valor,)).fetchone()
+            if otra:
+                return f"Ya hay otra factura con el NCF `{valor}`."
+        conn.execute(f"UPDATE facturas SET {campo}=? WHERE id=?", (valor, fila["id"]))
+    return ""
+
+
 def preparar_606(facturas: list[dict], mes: str) -> tuple[list[dict], list[str], list[str]]:
     """Convierte las facturas del mes en filas del 606.
 
@@ -1084,12 +1145,23 @@ def preparar_606(facturas: list[dict], mes: str) -> tuple[list[dict], list[str],
             prop = tope
 
         if not rnc_valido(rnc):
-            bloqueos.append(f"`{ncf}` {nom}: **RNC {rnc} no existe** (falla el dígito "
-                            f"verificador). Búscalo en una factura anterior del mismo "
-                            f"proveedor — casi siempre es un dígito mal leído.")
+            sug = sugerir_rnc(nom, rnc)
+            if sug:
+                bloqueos.append(
+                    f"*{md(nom)}* — RNC `{rnc}` no existe (falla el dígito verificador).\n"
+                    f"   En el historial ese proveedor aparece {sug[1]} veces con "
+                    f"`{sug[0]}`. Para arreglarlo:\n"
+                    f"   `/arreglar {ncf} rnc {sug[0]}`")
+            else:
+                bloqueos.append(
+                    f"*{md(nom)}* — RNC `{rnc}` no existe (falla el dígito verificador). "
+                    f"No lo encuentro en meses anteriores; míralo en la factura y luego:\n"
+                    f"   `/arreglar {ncf} rnc <el bueno>`")
         if not RE_NCF_OK.match(ncf):
-            bloqueos.append(f"`{ncf}` {nom}: **NCF mal formado** ({len(ncf)} caracteres). "
-                            f"Tiene que ser B+10 dígitos o E+12.")
+            bloqueos.append(
+                f"*{md(nom)}* — NCF `{ncf}` mal formado ({len(ncf)} caracteres; "
+                f"tiene que ser B+10 dígitos o E+12). Hay que leerlo de la foto:\n"
+                f"   `/arreglar {ncf} ncf <el bueno>`")
         if ncf in vistos:
             bloqueos.append(f"`{ncf}` {nom}: NCF repetido.")
         vistos[ncf] = True
@@ -2221,7 +2293,7 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
         f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
         f"Mándamelo tal cual y lo cargo completo.\n\n"
-        f"_Avanzado:_ /lista  /borrar  /mes YYYY-MM",
+        f"_Avanzado:_ /lista  /arreglar  /borrar  /mes YYYY-MM",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -2653,7 +2725,8 @@ async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto += [f"{i}. {b}" for i, b in enumerate(bloqueos[:12], 1)]
         if len(bloqueos) > 12:
             texto.append(f"…y {len(bloqueos) - 12} más.")
-        texto += ["", "Corrígelas con *⚠️ Pendientes* o /lista y vuelve a pedir el archivo."]
+        texto += ["", "Arréglalas con el comando que sale en cada línea "
+                      "(o /arreglar para verlas otra vez) y vuelve a pedir el archivo."]
         await query.message.reply_text("\n".join(texto), parse_mode="Markdown")
         return
 
@@ -2685,6 +2758,51 @@ async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.reply_text(
         "👆 Ese es el archivo que se sube a la Oficina Virtual de la DGII.",
+    )
+
+
+async def cmd_arreglar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Corrige el RNC o el NCF de una factura ya guardada.
+
+    `/arreglar <NCF> rnc <valor>`  ·  `/arreglar <NCF> ncf <valor>`
+    Sin argumentos, lista los problemas del mes con el comando ya escrito."""
+    if not is_allowed(update): return
+    args = context.args or []
+
+    if len(args) < 3:
+        mes = get_mes(context)
+        _, bloqueos, _ = preparar_606(get_facturas(mes), mes)
+        if not bloqueos:
+            await update.message.reply_text(
+                f"✅ *{mes}* no tiene nada que arreglar.\n\n"
+                f"_Si aun así quieres corregir algo:_\n"
+                f"`/arreglar <NCF> rnc <valor>`\n"
+                f"`/arreglar <NCF> ncf <valor>`",
+                parse_mode="Markdown")
+            return
+        texto = [f"🔧 *{len(bloqueos)} cosa(s) por arreglar en {mes}*", ""]
+        texto += [f"{i}. {b}" for i, b in enumerate(bloqueos[:10], 1)]
+        if len(bloqueos) > 10:
+            texto.append(f"…y {len(bloqueos) - 10} más.")
+        texto.append("\nCopia el comando y mándalo tal cual.")
+        await update.message.reply_text("\n".join(texto), parse_mode="Markdown")
+        return
+
+    ncf_actual, campo, valor = args[0].strip().upper(), args[1].lower(), args[2]
+    error = actualizar_factura(ncf_actual, campo, valor)
+    if error:
+        await update.message.reply_text(f"❌ {error}", parse_mode="Markdown")
+        return
+
+    await update.message.reply_text(
+        f"✅ Corregido.\n\n`{md(ncf_actual)}` → {campo.upper()} `{md(valor)}`\n\n"
+        f"Vuelve a pedir 📤 *Archivo DGII* para ver si ya queda limpio.",
+        parse_mode="Markdown")
+    await notify_group(
+        context,
+        f"🔧 *Corrección* — {md(user_label(update))}\n"
+        f"`{md(ncf_actual)}` · {campo.upper()} → `{md(valor)}`",
+        origen_chat_id=update.effective_chat.id if update.effective_chat else None,
     )
 
 
@@ -2985,6 +3103,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
     app.add_handler(CommandHandler("id",         cmd_id))
     app.add_handler(CommandHandler("dgii",       cmd_dgii, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("arreglar",   cmd_arreglar, filters=filters.ChatType.PRIVATE))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$") & filters.ChatType.PRIVATE,    cmd_resumen))
