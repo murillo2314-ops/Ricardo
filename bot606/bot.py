@@ -2391,9 +2391,13 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # se pide: manda la lista blanca de IDs, ya verificada arriba. Se deja pasar
     # /id (hace falta para configurar el grupo espejo) y se calla en lo demás
     # para no llenar el grupo de mensajes del bot.
+    # Ojo: cada deploy reinicia el bot y `unlocked` se pierde (vive en memoria),
+    # así que aquí cae todo el mundo después de cada despliegue. Por eso pasan
+    # los tres comandos que hacen falta para configurar y para que el bot pueda
+    # retirar su propio teclado del grupo.
     chat = update.effective_chat
     if chat is not None and chat.type in ("group", "supergroup"):
-        if re.match(r"^/id(@\w+)?$", text):
+        if re.match(r"^/(id|start|ayuda)(@\w+)?$", text):
             return
         raise ApplicationHandlerStop
 

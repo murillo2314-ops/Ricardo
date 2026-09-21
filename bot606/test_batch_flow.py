@@ -569,6 +569,9 @@ async def run():
 
     # El menú es un ReplyKeyboardMarkup: se le pega al chat y le sale a TODOS.
     # En un grupo no debe aparecer nunca.
+    # Tras un deploy nadie esta "unlocked" (vive en memoria): /start en el
+    # grupo tiene que pasar igual, o el bot no puede ni retirar su teclado.
+    app.user_data[UID].pop("unlocked", None)
     n3 = len(fake.calls)
     await drive(upd_grupo("/start"))
     envios = [p for m, p in fake.calls[n3:] if m == "sendMessage"]
@@ -580,6 +583,9 @@ async def run():
           "sino que quita el que hubiera quedado pegado")
     check("privado" in envios[0]["text"],
           "y explica que para subir facturas hay que escribirle por privado")
+    check(app.user_data[UID].get("unlocked") is not True,
+          "y lo hace SIN desbloquear a nadie (la contraseña sigue siendo del privado)")
+    app.user_data[UID]["unlocked"] = True
 
     for texto in (bot.BTN_RESUMEN, bot.BTN_EXPORTAR, bot.BTN_DGII,
                   bot.BTN_PENDIENTES, bot.BTN_NUEVA):
