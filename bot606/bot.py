@@ -2293,7 +2293,7 @@ async def show_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"❓ *Ayuda* — ver este menú nuevamente\n\n"
         f"🏦 ¿Tienes el *Excel de comprobantes del Banco Santa Cruz*? "
         f"Mándamelo tal cual y lo cargo completo.\n\n"
-        f"_Avanzado:_ /lista  /arreglar  /borrar  /mes YYYY-MM",
+        f"_Avanzado:_ /lista  /arreglar  /grupo  /borrar  /mes YYYY-MM",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard(),
     )
@@ -2761,6 +2761,56 @@ async def on_pick_dgii(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_grupo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Diagnóstico del grupo espejo.
+
+    `notify_group` se traga los fallos a propósito —la factura ya está
+    guardada y no se va a romper el flujo por un aviso— así que sin esto no
+    hay forma de saber por qué el grupo está mudo."""
+    if not is_allowed(update): return
+
+    if not GROUP_CHAT_ID:
+        await update.message.reply_text(
+            "🔴 *No hay grupo configurado.*\n\n"
+            "La variable `GROUP_CHAT_ID` está vacía, así que el bot no avisa a "
+            "ningún sitio. Es lo que está pasando.\n\n"
+            "Ponla en Railway → *Variables*, con el ID del grupo (va **negativo**). "
+            "Para sacarlo, escribe `/id` dentro del grupo.\n\n"
+            "Railway redespliega solo al guardar.",
+            parse_mode="Markdown")
+        return
+
+    try:
+        chat = await context.bot.get_chat(GROUP_CHAT_ID)
+        destino = f"*{md(chat.title or chat.id)}* (`{chat.id}`, {chat.type})"
+    except Exception as e:
+        await update.message.reply_text(
+            f"🔴 *No puedo ver el grupo* `{md(GROUP_CHAT_ID)}`.\n\n"
+            f"Telegram dice: _{md(e)}_\n\n"
+            f"Suele ser una de dos: el bot ya no está en el grupo, o el ID "
+            f"cambió porque el grupo se convirtió en supergrupo. Escribe `/id` "
+            f"dentro del grupo y compara con lo que hay en Railway.",
+            parse_mode="Markdown")
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text="✅ Prueba del espejo — si lees esto, los avisos funcionan.")
+    except Exception as e:
+        await update.message.reply_text(
+            f"🟠 Veo el grupo {destino} pero *no puedo escribir en él*.\n\n"
+            f"Telegram dice: _{md(e)}_\n\n"
+            f"Míralo en los permisos del grupo: el bot necesita poder enviar "
+            f"mensajes.", parse_mode="Markdown")
+        return
+
+    await update.message.reply_text(
+        f"🟢 *Espejo funcionando.*\n\nAvisando a {destino}.\n"
+        f"Acabo de mandar un mensaje de prueba — míralo ahí.",
+        parse_mode="Markdown")
+
+
 async def cmd_arreglar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Corrige el RNC o el NCF de una factura ya guardada.
 
@@ -3104,6 +3154,7 @@ def build_application(bot=None) -> Application:
     app.add_handler(CommandHandler("id",         cmd_id))
     app.add_handler(CommandHandler("dgii",       cmd_dgii, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("arreglar",   cmd_arreglar, filters=filters.ChatType.PRIVATE))
+    app.add_handler(CommandHandler("grupo",      cmd_grupo, filters=filters.ChatType.PRIVATE))
 
     # Botones del menú fijo → mismos comandos (sin escribir nada)
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RESUMEN)}$") & filters.ChatType.PRIVATE,    cmd_resumen))
